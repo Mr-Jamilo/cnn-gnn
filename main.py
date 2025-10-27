@@ -106,6 +106,20 @@ def train_loop(dataloader, model, loss_fn, optimiser, device):
             loss, current = loss.item(), batch * 64 + len(X)
             print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
+def test_loop(dataloader, model, loss_fn, device):
+    model.eval()
+    size = len(dataloader.dataset)
+    num_batches = len(dataloader)
+    test_loss = 0
+
+    with torch.no_grad():
+        for X, y in dataloader:
+            X, y = X.to(device), y.to(device).float()
+            pred = model(X)
+            test_loss += loss_fn(pred, y).item()
+
+    test_loss /= num_batches
+    print(f"Validation loss: {test_loss:.6f}\n")
 
 train_dataloader, test_dataloader, val_dataloader = PrepData()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -123,4 +137,5 @@ optimiser = torch.optim.SGD(model.parameters(), lr=learning_rate)
 for epoch in range(epochs):
     print(f"Epoch {epoch + 1}/{epochs}")
     train_loop(train_dataloader, model, loss_fn, optimiser, device)
+    test_loop(test_dataloader, model, loss_fn, device)
 print("done")
