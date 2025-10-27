@@ -45,18 +45,15 @@ class CNN(nn.Module):
             nn.MaxPool2d(2, 2),
 
             nn.Flatten(),
-            nn.Linear(64*28*28, 256),
+            nn.Linear(16*54*54, 256),
             nn.ReLU(),
             nn.Dropout(0.5),
-            nn.Linear(256, 46)
+            nn.Linear(256, 45)
         )
 
     def forward(self, x):
         x = self.cnn_stack(x)
         return x
-
-
-
 
 def PrepData():
     transforms = v2.Compose([
@@ -95,9 +92,35 @@ def DisplayData(train_dataloader):
     plt.savefig("output.png")
     print(f"Labels: {label}")
 
-PrepData()
+def train_loop(dataloader, model, loss_fn, optimiser, device):
+    size = len(dataloader.dataset)
+    model.train()
+    for batch, (X, y) in enumerate(dataloader):
+        X, y = X.to(device), y.to(device).float()
+        pred = model(X)
+        loss = loss_fn(pred, y)
+        loss.backward()
+        optimiser.step()
+        optimiser.zero_grad()
+        if batch % 100 == 0:
+            loss, current = loss.item(), batch * 64 + len(X)
+            print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+
+
+train_dataloader, test_dataloader, val_dataloader = PrepData()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 #print(device)
 
 model = CNN().to(device)
-print(model)
+#print(model)
+
+learning_rate = 0.001
+epochs = 10
+
+loss_fn = nn.BCEWithLogitsLoss()
+optimiser = torch.optim.SGD(model.parameters(), lr=learning_rate)
+
+for epoch in range(epochs):
+    print(f"Epoch {epoch + 1}/{epochs}")
+    train_loop(train_dataloader, model, loss_fn, optimiser, device)
+print("done")
