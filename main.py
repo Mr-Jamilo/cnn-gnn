@@ -92,7 +92,7 @@ def DisplayData(train_dataloader):
     plt.savefig("output.png")
     print(f"Labels: {label}")
 
-def train_loop(dataloader, model, loss_fn, optimiser, device):
+def TrainLoop(dataloader, model, loss_fn, optimiser, device):
     size = len(dataloader.dataset)
     model.train()
     for batch, (X, y) in enumerate(dataloader):
@@ -106,7 +106,7 @@ def train_loop(dataloader, model, loss_fn, optimiser, device):
             loss, current = loss.item(), batch * 64 + len(X)
             print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
-def test_loop(dataloader, model, loss_fn, device):
+def TestLoop(dataloader, model, loss_fn, device):
     model.eval()
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -121,21 +121,29 @@ def test_loop(dataloader, model, loss_fn, device):
     test_loss /= num_batches
     print(f"Validation loss: {test_loss:.6f}\n")
 
-train_dataloader, test_dataloader, val_dataloader = PrepData()
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#print(device)
+def UseModel(step):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #print(device)
+    model = CNN().to(device)
+    #print(model)
 
-model = CNN().to(device)
-#print(model)
+    learning_rate = 0.001
+    epochs = 10
+    loss_fn = nn.BCEWithLogitsLoss()
+    optimiser = torch.optim.SGD(model.parameters(), lr=learning_rate)
+    
+    train_dataloader, test_dataloader, val_dataloader = PrepData()
+    
+    for epoch in range(epochs):
+        print(f"Epoch {epoch + 1}/{epochs}")
+        if step == "train":
+            TrainLoop(train_dataloader, model, loss_fn, optimiser, device)
+        elif step == "test":
+            TestLoop(test_dataloader, model, loss_fn, device)
+        elif step == "val":
+            print("val")
+        else:
+            print("L")
+    print("done")
 
-learning_rate = 0.001
-epochs = 10
-
-loss_fn = nn.BCEWithLogitsLoss()
-optimiser = torch.optim.SGD(model.parameters(), lr=learning_rate)
-
-for epoch in range(epochs):
-    print(f"Epoch {epoch + 1}/{epochs}")
-    train_loop(train_dataloader, model, loss_fn, optimiser, device)
-    test_loop(test_dataloader, model, loss_fn, device)
-print("done")
+UseModel("train")
