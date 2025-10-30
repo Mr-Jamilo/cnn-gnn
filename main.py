@@ -75,9 +75,9 @@ def PrepData():
     #print(test_data.__len__())
     #print(val_data.__len__())
 
-    train_dataloader = DataLoader(train_data, batch_size=64, shuffle=True)
-    test_dataloader = DataLoader(test_data, batch_size=64, shuffle=True)
-    val_dataloader = DataLoader(val_data, batch_size=64, shuffle=True)
+    train_dataloader = DataLoader(train_data, batch_size=64, shuffle=True, num_workers=8, pin_memory=True)
+    test_dataloader = DataLoader(test_data, batch_size=64, shuffle=True, num_workers=8, pin_memory=True)
+    val_dataloader = DataLoader(val_data, batch_size=64, shuffle=True, num_workers=8, pin_memory=True)
 
     return train_dataloader, test_dataloader, val_dataloader
     #return train_dataloader
@@ -102,7 +102,7 @@ def TrainLoop(dataloader, model, loss_fn, optimiser, device):
         loss.backward()
         optimiser.step()
         optimiser.zero_grad()
-        if batch % 100 == 0:
+        if batch % 5 == 0:
             loss, current = loss.item(), batch * 64 + len(X)
             print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
@@ -121,7 +121,14 @@ def TestLoop(dataloader, model, loss_fn, device):
     test_loss /= num_batches
     print(f"Validation loss: {test_loss:.6f}\n")
 
-def UseModel(step):
+def InitModel():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #print(device)
+    model = CNN().to(device)
+    #print(model)
+    return device, model
+
+def UseModel(device, model):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     #print(device)
     model = CNN().to(device)
@@ -136,14 +143,10 @@ def UseModel(step):
     
     for epoch in range(epochs):
         print(f"Epoch {epoch + 1}/{epochs}")
-        if step == "train":
-            TrainLoop(train_dataloader, model, loss_fn, optimiser, device)
-        elif step == "test":
-            TestLoop(test_dataloader, model, loss_fn, device)
-        elif step == "val":
-            print("val")
-        else:
-            print("L")
+        TrainLoop(train_dataloader, model, loss_fn, optimiser, device)
+        TestLoop(test_dataloader, model, loss_fn, device)
     print("done")
 
-UseModel("train")
+device, model = InitModel()
+UseModel(device, model)
+
