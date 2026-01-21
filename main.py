@@ -2,18 +2,28 @@ import os
 import pandas as pd
 import torch
 import numpy as np
+import matplotlib.pyplot as plt
+import torchvision.ops
 from torch import nn
 from PIL import Image
 from torchvision.transforms import v2
 from torch.utils.data import Dataset, random_split, DataLoader
 from torchmetrics.classification import MultilabelF1Score
-import matplotlib.pyplot as plt
+from torchvision import models
 from sklearn.metrics import classification_report
-
 
 class CustomImageDataset(Dataset):
     def __init__(self, label_file, img_dir, transform=None, target_transform=None):
-        self.data = pd.read_csv(label_file)
+        full_df = pd.read_csv(label_file)
+        label_cols = [col for col in full_df.columns if col not in ['ID', 'Disease_Risk']]
+        class_counts = full_df[label_cols].sum(axis=0)
+        valid_labels = class_counts[class_counts >= 150].index.tolist()
+
+        print(f"Original classes: {len(label_cols)}")
+        print(f"Classes with >= 50 examples: {len(valid_labels)}")
+        print(f"Dropped: {set(label_cols) - set(valid_labels)}")
+
+        self.data = full_df[['ID', 'Disease_Risk'] + valid_labels]
         self.img_dir = img_dir
         self.transform = transform
         self.target_transform = target_transform
@@ -37,6 +47,23 @@ class CustomImageDataset(Dataset):
             labels = self.target_transform(labels)
         return tensor_img, labels
 
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        # inputs: logits (raw scores from the model, BEFORE sigmoid)
+        # targets: binary labels (0 or 1)
+        return torchvision.ops.sigmoid_focal_loss(
+            inputs,
+            targets,
+            alpha=self.alpha,
+            gamma=self.gamma,
+            reduction=self.reduction
+        )
 
 class CNN(nn.Module):
     def __init__(self):
@@ -47,10 +74,21 @@ class CNN(nn.Module):
             nn.MaxPool2d(2, 2),
             nn.BatchNorm2d(32),
 
+            nn.Conv2d(32 , 32, 3, 1, 1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.BatchNorm2d(32),
+
             nn.Conv2d(32, 64, 3, 1, 1),
             nn.ReLU(),
             nn.MaxPool2d(2, 2),
             nn.BatchNorm2d(64),
+
+            nn.Conv2d(64, 64, 3, 1, 1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.BatchNorm2d(64),
+
 
             nn.Conv2d(64, 128, 3, 1, 1),
             nn.ReLU(),
@@ -65,15 +103,33 @@ class CNN(nn.Module):
             nn.AdaptiveAvgPool2d((4, 4)),
             nn.Flatten(),
             nn.Dropout(0.5),
-            nn.Linear(256 * 16, 512),
+            nn.Linear(256 * 16, 128),
             nn.Dropout(0.5),
-            nn.Linear(512, 45)
+            nn.Linear(128, 7)
         )
 
     def forward(self, x):
         x = self.cnn_stack(x)
         return x
 
+# class CNN(nn.Module):
+#     def __init__(self):
+#         super().__init__()
+#         self.base_model = models.densenet201(weights='DEFAULT')
+#         # self.base_model = models.resnet18(weights='DEFAULT')
+#         # for param in self.base_model.parameters():
+#         #     param.requires_grad = False
+#         num_features = self.base_model.classifier.in_features
+#         self.base_model.classifier = nn.Sequential(
+#             nn.Linear(num_features, 256),
+#             nn.ReLU(),
+#             nn.Dropout(0.5),
+#             nn.Linear(256, 7)
+#         )
+#
+#
+#     def forward(self, x):
+#         return self.base_model(x)
 
 def PrepData():
     transforms = v2.Compose([
@@ -93,6 +149,7 @@ def PrepData():
     negatives = total - positives
     pos_weight_vals = (negatives / (positives + 1e-5)).values
     pos_weights = torch.tensor(pos_weight_vals, dtype=torch.float32).sqrt()
+    # pos_weights = torch.clamp(pos_weights, max=10.0)
 
     # print(dataset.__getitem__(3))
     # print(dataset.__len__())
@@ -143,7 +200,7 @@ def TrainLoop(dataloader, model, loss_fn, optimiser, device):
 
         total_loss += loss.item()
 
-        preds = torch.sigmoid(pred) > 0.5
+        preds = torch.sigmoid(pred) > 0.3
         correct += (preds == y.bool()).sum().item()
         total += y.numel()
 
@@ -167,7 +224,7 @@ def ValidateLoop(dataloader, model, loss_fn, device):
             X, y = X.to(device), y.to(device).float()
             pred = model(X)
             val_loss += loss_fn(pred, y).item()
-            preds = torch.sigmoid(pred) > 0.5
+            preds = torch.sigmoid(pred) > 0.3
             total_positive_preds += preds.sum().item()
             correct += (preds == y.bool()).sum().item()
             total += y.numel()
@@ -182,7 +239,7 @@ def TestModel(device, model, loss_fn, dataloader):
     test_loss = 0
     correct = 0
     total = 0
-    metric = MultilabelF1Score(num_labels=45, average='macro', threshold=0.25).to(device)
+    metric = MultilabelF1Score(num_labels=7, average='micro', threshold=0.5).to(device)
 
     all_preds = []
     all_targets = []
@@ -192,7 +249,7 @@ def TestModel(device, model, loss_fn, dataloader):
             X, y = X.to(device), y.to(device).float()
             pred = model(X)
             test_loss += loss_fn(pred, y).item()
-            preds = torch.sigmoid(pred) > 0.25
+            preds = torch.sigmoid(pred) > 0.35
             correct += (preds == y.bool()).sum().item()
             total += y.numel()
             metric.update(pred, y)
@@ -219,11 +276,15 @@ def InitModel():
 
 def UseModel(device, model):
     learning_rate = 1e-5
-    epochs = 20
-    weight_decay = 1e-5
-    optimiser = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    epochs = 200
+    weight_decay = 1e-3
+
+    optimiser = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
+
     train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData()
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(device))
+    # loss_fn = FocalLoss(alpha=0.4, gamma=2, reduction='mean').to(device)
 
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
@@ -237,6 +298,7 @@ def UseModel(device, model):
         val_losses.append(val_loss)
         train_accs.append(train_acc)
         val_accs.append(val_acc)
+        scheduler.step(val_loss)
 
         print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
         print(f"Val Loss:   {val_loss:.4f}, Val Acc:   {val_acc:.4f}\n")
