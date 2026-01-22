@@ -1,3 +1,7 @@
+#TODO look into residual connections for CNN
+#TODO add constants for hyperparameters
+#TODO look into bash scripts for running experiments (https://github.com/Delphboy/SuperCap/tree/main)
+
 import os
 import pandas as pd
 import torch
@@ -11,6 +15,15 @@ from torch.utils.data import Dataset, random_split, DataLoader
 from torchmetrics.classification import MultilabelF1Score
 from torchvision import models
 from sklearn.metrics import classification_report
+
+LEARNING_RATE = 1e-5
+EPOCHS = 50
+CLASSES = 7
+WEIGHT_DECAY = 1e-3
+TRAINING_BATCH_SIZE = 64
+TEST_BATCH_SIZE = 64
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
 
 class CustomImageDataset(Dataset):
     def __init__(self, label_file, img_dir, transform=None, target_transform=None):
@@ -164,9 +177,9 @@ def PrepData():
     # print(test_data.__len__())
     # print(val_data.__len__())
 
-    train_dataloader = DataLoader(train_data, batch_size=64, shuffle=True, num_workers=8, pin_memory=True)
-    val_dataloader = DataLoader(val_data, batch_size=64, shuffle=True, num_workers=8, pin_memory=True)
-    test_dataloader = DataLoader(test_data, batch_size=64, shuffle=False, num_workers=8, pin_memory=True)
+    train_dataloader = DataLoader(train_data, batch_size=256, shuffle=True, num_workers=4, pin_memory=True)
+    val_dataloader = DataLoader(val_data, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
+    test_dataloader = DataLoader(test_data, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
 
     return train_dataloader, val_dataloader, test_dataloader, pos_weights
     # return train_dataloader
@@ -183,7 +196,7 @@ def DisplayData(train_dataloader):
     print(f"Labels: {label}")
 
 
-def TrainLoop(dataloader, model, loss_fn, optimiser, device):
+def TrainLoop(dataloader, model, loss_fn, optimiser):
     size = len(dataloader.dataset)
     model.train()
     total_loss = 0
@@ -191,7 +204,10 @@ def TrainLoop(dataloader, model, loss_fn, optimiser, device):
     total = 0
 
     for batch, (X, y) in enumerate(dataloader):
-        X, y = X.to(device), y.to(device).float()
+        # print("DEBUG", f"{y[0]}")
+
+        X, y = X.to(DEVICE), y.to(DEVICE).float()
+
         pred = model(X)
         loss = loss_fn(pred, y)
         loss.backward()
@@ -204,15 +220,14 @@ def TrainLoop(dataloader, model, loss_fn, optimiser, device):
         correct += (preds == y.bool()).sum().item()
         total += y.numel()
 
-        if batch % 5 == 0:
-            loss, current = loss.item(), batch * 64 + len(X)
-            print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+        loss, current = loss.item(), batch * 256 + len(X)
+        print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
     avg_loss = total_loss / len(dataloader)
     accuracy = correct / total
     return avg_loss, accuracy
 
 
-def ValidateLoop(dataloader, model, loss_fn, device):
+def ValidateLoop(dataloader, model, loss_fn):
     model.eval()
     val_loss = 0
     correct = 0
@@ -221,7 +236,7 @@ def ValidateLoop(dataloader, model, loss_fn, device):
 
     with torch.no_grad():
         for X, y in dataloader:
-            X, y = X.to(device), y.to(device).float()
+            X, y = X.to(DEVICE), y.to(DEVICE).float()
             pred = model(X)
             val_loss += loss_fn(pred, y).item()
             preds = torch.sigmoid(pred) > 0.3
@@ -234,19 +249,19 @@ def ValidateLoop(dataloader, model, loss_fn, device):
     return avg_loss, accuracy
 
 
-def TestModel(device, model, loss_fn, dataloader):
+def TestModel(model, loss_fn, dataloader):
     model.eval()
     test_loss = 0
     correct = 0
     total = 0
-    metric = MultilabelF1Score(num_labels=7, average='micro', threshold=0.5).to(device)
+    metric = MultilabelF1Score(num_labels=7, average='micro', threshold=0.5).to(DEVICE)
 
     all_preds = []
     all_targets = []
 
     with torch.no_grad():
         for X, y in dataloader:
-            X, y = X.to(device), y.to(device).float()
+            X, y = X.to(DEVICE), y.to(DEVICE).float()
             pred = model(X)
             test_loss += loss_fn(pred, y).item()
             preds = torch.sigmoid(pred) > 0.35
@@ -267,32 +282,33 @@ def TestModel(device, model, loss_fn, dataloader):
 
 
 def InitModel():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # print(device)
-    model = CNN().to(device)
+    model = CNN().to(DEVICE)
     # print(model)
-    return device, model
+    return model
 
 
-def UseModel(device, model):
+def UseModel(model):
     learning_rate = 1e-5
-    epochs = 200
+    epochs = 50
     weight_decay = 1e-3
 
     optimiser = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
 
     train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData()
-    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(device))
-    # loss_fn = FocalLoss(alpha=0.4, gamma=2, reduction='mean').to(device)
+    # loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
+    loss_fn = nn.CrossEntropyLoss().to(DEVICE)
+    # loss_fn = FocalLoss(alpha=0.4, gamma=2, reduction='mean').to(DEVICE)
 
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
 
     for epoch in range(epochs):
         print(f"Epoch {epoch + 1}/{epochs}")
-        train_loss, train_acc = TrainLoop(train_dataloader, model, loss_fn, optimiser, device)
-        val_loss, val_acc = ValidateLoop(val_dataloader, model, loss_fn, device)
+        train_loss, train_acc = TrainLoop(train_dataloader, model, loss_fn, optimiser)
+        val_loss, val_acc = ValidateLoop(val_dataloader, model, loss_fn)
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
@@ -325,11 +341,13 @@ def UseModel(device, model):
     plt.savefig("accuracy_graph.png")
     # plt.show()
 
-    test_loss, test_acc, f1_score = TestModel(device, model, loss_fn, test_dataloader)
+    test_loss, test_acc, f1_score = TestModel(model, loss_fn, test_dataloader)
     print(f'test loss = {test_loss:.4f}')
     print(f'test acc = {test_acc:.4f}')
     print(f'test f1 score = {f1_score:.4f}')
 
 
-device, model = InitModel()
-UseModel(device, model)
+if __name__ == '__main__':
+    assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
+    model = InitModel()
+    UseModel(model)
