@@ -1,5 +1,4 @@
 #TODO look into residual connections for CNN
-#TODO add constants for hyperparameters
 #TODO look into bash scripts for running experiments (https://github.com/Delphboy/SuperCap/tree/main)
 
 import os
