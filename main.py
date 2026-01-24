@@ -18,24 +18,34 @@ from sklearn.metrics import classification_report
 
 LEARNING_RATE = 1e-5
 EPOCHS = 50
-CLASSES = 7
+MINIMUM_CLASS_EXAMPLES = 150
 WEIGHT_DECAY = 1e-3
-TRAINING_BATCH_SIZE = 64
+TRAINING_BATCH_SIZE = 512
 TEST_BATCH_SIZE = 64
+TRANSFORMS = v2.Compose([
+    v2.ToImage(),
+    v2.Resize((224, 224)),
+    v2.RandomHorizontalFlip(0.5),
+    v2.RandomRotation(degrees=15),
+    v2.ConvertImageDtype(torch.float),
+    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
+
 
 class CustomImageDataset(Dataset):
     def __init__(self, label_file, img_dir, transform=None, target_transform=None):
         full_df = pd.read_csv(label_file)
         label_cols = [col for col in full_df.columns if col not in ['ID', 'Disease_Risk']]
         class_counts = full_df[label_cols].sum(axis=0)
-        valid_labels = class_counts[class_counts >= 150].index.tolist()
+        valid_labels = class_counts[class_counts >= MINIMUM_CLASS_EXAMPLES].index.tolist()
 
         print(f"Original classes: {len(label_cols)}")
         print(f"Classes with >= 50 examples: {len(valid_labels)}")
         print(f"Dropped: {set(label_cols) - set(valid_labels)}")
 
+        self.classes_count = len(valid_labels)
         self.data = full_df[['ID', 'Disease_Risk'] + valid_labels]
         self.img_dir = img_dir
         self.transform = transform
@@ -68,8 +78,6 @@ class FocalLoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, inputs, targets):
-        # inputs: logits (raw scores from the model, BEFORE sigmoid)
-        # targets: binary labels (0 or 1)
         return torchvision.ops.sigmoid_focal_loss(
             inputs,
             targets,
@@ -79,7 +87,7 @@ class FocalLoss(nn.Module):
         )
 
 class CNN(nn.Module):
-    def __init__(self):
+    def __init__(self, num_classes):
         super().__init__()
         self.cnn_stack = nn.Sequential(
             nn.Conv2d(3, 32, 3, 1, 1),
@@ -118,7 +126,7 @@ class CNN(nn.Module):
             nn.Dropout(0.5),
             nn.Linear(256 * 16, 128),
             nn.Dropout(0.5),
-            nn.Linear(128, 7)
+            nn.Linear(128, num_classes)
         )
 
     def forward(self, x):
@@ -144,17 +152,7 @@ class CNN(nn.Module):
 #     def forward(self, x):
 #         return self.base_model(x)
 
-def PrepData():
-    transforms = v2.Compose([
-        v2.ToImage(),
-        v2.Resize((224, 224)),
-        v2.RandomHorizontalFlip(0.5),
-        v2.RandomRotation(degrees=15),
-        v2.ConvertImageDtype(torch.float),
-        v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-    dataset = CustomImageDataset(label_file='dataset/labels.csv', img_dir='dataset', transform=transforms)
+def PrepData(dataset):
     df = dataset.data
     label_cols = [col for col in df.columns if col not in ['ID', 'Disease_Risk']]
     positives = df[label_cols].sum(axis=0).astype(float)
@@ -177,9 +175,9 @@ def PrepData():
     # print(test_data.__len__())
     # print(val_data.__len__())
 
-    train_dataloader = DataLoader(train_data, batch_size=256, shuffle=True, num_workers=4, pin_memory=True)
-    val_dataloader = DataLoader(val_data, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
-    test_dataloader = DataLoader(test_data, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
+    train_dataloader = DataLoader(train_data, batch_size=TRAINING_BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True)
+    val_dataloader = DataLoader(val_data, batch_size=TEST_BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True)
+    test_dataloader = DataLoader(test_data, batch_size=TEST_BATCH_SIZE, shuffle=False, num_workers=8, pin_memory=True)
 
     return train_dataloader, val_dataloader, test_dataloader, pos_weights
     # return train_dataloader
@@ -220,7 +218,7 @@ def TrainLoop(dataloader, model, loss_fn, optimiser):
         correct += (preds == y.bool()).sum().item()
         total += y.numel()
 
-        loss, current = loss.item(), batch * 256 + len(X)
+        loss, current = loss.item(), batch * TRAINING_BATCH_SIZE + len(X)
         print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
     avg_loss = total_loss / len(dataloader)
     accuracy = correct / total
@@ -281,32 +279,20 @@ def TestModel(model, loss_fn, dataloader):
     return avg_loss, accuracy, f1_score
 
 
-def InitModel():
-    # DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # print(device)
-    model = CNN().to(DEVICE)
-    # print(model)
-    return model
+def UseModel(model, dataset):
+    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
 
-
-def UseModel(model):
-    learning_rate = 1e-5
-    epochs = 50
-    weight_decay = 1e-3
-
-    optimiser = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
-
-    train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData()
-    # loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
-    loss_fn = nn.CrossEntropyLoss().to(DEVICE)
+    train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData(dataset)
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
+    # loss_fn = nn.CrossEntropyLoss().to(DEVICE)
     # loss_fn = FocalLoss(alpha=0.4, gamma=2, reduction='mean').to(DEVICE)
 
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
 
-    for epoch in range(epochs):
-        print(f"Epoch {epoch + 1}/{epochs}")
+    for epoch in range(EPOCHS):
+        print(f"Epoch {epoch + 1}/{EPOCHS}")
         train_loss, train_acc = TrainLoop(train_dataloader, model, loss_fn, optimiser)
         val_loss, val_acc = ValidateLoop(val_dataloader, model, loss_fn)
 
@@ -314,7 +300,7 @@ def UseModel(model):
         val_losses.append(val_loss)
         train_accs.append(train_acc)
         val_accs.append(val_acc)
-        scheduler.step(val_loss)
+        # scheduler.step(val_loss)
 
         print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
         print(f"Val Loss:   {val_loss:.4f}, Val Acc:   {val_acc:.4f}\n")
@@ -349,5 +335,6 @@ def UseModel(model):
 
 if __name__ == '__main__':
     assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
-    model = InitModel()
-    UseModel(model)
+    dataset = CustomImageDataset(label_file='dataset/labels.csv', img_dir='dataset', transform=TRANSFORMS)
+    model = CNN(dataset.classes_count).to(DEVICE)
+    UseModel(model, dataset)
