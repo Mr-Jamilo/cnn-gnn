@@ -7,19 +7,21 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import torchvision.ops
+import torch.nn.functional as f
 from torch import nn
 from PIL import Image
+from torchvision.ops import sigmoid_focal_loss
 from torchvision.transforms import v2
 from torch.utils.data import Dataset, random_split, DataLoader
 from torchmetrics.classification import MultilabelF1Score
 from torchvision import models
 from sklearn.metrics import classification_report
 
-LEARNING_RATE = 1e-5
+LEARNING_RATE = 1e-4
 EPOCHS = 50
 MINIMUM_CLASS_EXAMPLES = 150
 WEIGHT_DECAY = 1e-3
-TRAINING_BATCH_SIZE = 512
+TRAINING_BATCH_SIZE = 256
 TEST_BATCH_SIZE = 64
 TRANSFORMS = v2.Compose([
     v2.ToImage(),
@@ -32,7 +34,6 @@ TRANSFORMS = v2.Compose([
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
 
-
 class CustomImageDataset(Dataset):
     def __init__(self, label_file, img_dir, transform=None, target_transform=None):
         full_df = pd.read_csv(label_file)
@@ -41,7 +42,7 @@ class CustomImageDataset(Dataset):
         valid_labels = class_counts[class_counts >= MINIMUM_CLASS_EXAMPLES].index.tolist()
 
         print(f"Original classes: {len(label_cols)}")
-        print(f"Classes with >= 50 examples: {len(valid_labels)}")
+        print(f"Classes with >= {MINIMUM_CLASS_EXAMPLES} examples: {len(valid_labels)}")
         print(f"Dropped: {set(label_cols) - set(valid_labels)}")
 
         self.classes_count = len(valid_labels)
@@ -85,52 +86,113 @@ class FocalLoss(nn.Module):
             reduction=self.reduction
         )
 
-class CNN(nn.Module):
-    def __init__(self, num_classes):
+
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
         super().__init__()
-        self.cnn_stack = nn.Sequential(
-            nn.Conv2d(3, 32, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-            nn.BatchNorm2d(32),
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
 
-            nn.Conv2d(32 , 32, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-            nn.BatchNorm2d(32),
-
-            nn.Conv2d(32, 64, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-            nn.BatchNorm2d(64),
-
-            nn.Conv2d(64, 64, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-            nn.BatchNorm2d(64),
-
-
-            nn.Conv2d(64, 128, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-            nn.BatchNorm2d(128),
-
-            nn.Conv2d(128, 256, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-            nn.BatchNorm2d(256),
-
-            nn.AdaptiveAvgPool2d((4, 4)),
-            nn.Flatten(),
-            nn.Dropout(0.5),
-            nn.Linear(256 * 16, 128),
-            nn.Dropout(0.5),
-            nn.Linear(128, num_classes)
-        )
+        # Shortcut connection to match dimensions
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride),
+                nn.BatchNorm2d(out_channels)
+            )
 
     def forward(self, x):
-        x = self.cnn_stack(x)
-        return x
+        out = f.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)  # The residual connection
+        out = f.relu(out)
+        return out
+
+
+class ResNet(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+        self.in_channels = 32
+
+        # Initial Layer
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+
+        # Residual Stages
+        # We use stride=2 instead of MaxPool to downsample efficiently
+        self.layer1 = ResidualBlock(32, 32, stride=1)
+        self.layer2 = ResidualBlock(32, 64, stride=2)
+        self.layer3 = ResidualBlock(64, 128, stride=2)
+        self.layer4 = ResidualBlock(128, 256, stride=2)
+
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.flatten = nn.Flatten()
+        self.fc = nn.Linear(256, num_classes)
+
+    def forward(self, x):
+        out = f.relu(self.bn1(self.conv1(x)))
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.layer4(out)
+        out = self.avg_pool(out)
+        out = self.flatten(out)
+        out = self.fc(out)
+        return out
+
+# class CNN(nn.Module):
+#     def __init__(self, num_classes):
+#         super().__init__()
+#         self.cnn_stack = nn.Sequential(
+#             nn.Conv2d(3, 32, 3, 1, 1),
+#             nn.ReLU(),
+#             nn.MaxPool2d(2, 2),
+#             nn.BatchNorm2d(32),
+#
+#             nn.Conv2d(32 , 32, 3, 1, 1),
+#             nn.ReLU(),
+#             nn.MaxPool2d(2, 2),
+#             nn.BatchNorm2d(32),
+#
+#             nn.Conv2d(32, 64, 3, 1, 1),
+#             nn.ReLU(),
+#             nn.MaxPool2d(2, 2),
+#             nn.BatchNorm2d(64),
+#
+#             nn.Conv2d(64, 64, 3, 1, 1),
+#             nn.ReLU(),
+#             nn.MaxPool2d(2, 2),
+#             nn.BatchNorm2d(64),
+#
+#
+#             nn.Conv2d(64, 128, 3, 1, 1),
+#             nn.ReLU(),
+#             nn.MaxPool2d(2, 2),
+#             nn.BatchNorm2d(128),
+#
+#             nn.Conv2d(128, 256, 3, 1, 1),
+#             nn.ReLU(),
+#             nn.MaxPool2d(2, 2),
+#             nn.BatchNorm2d(256),
+#
+#             nn.Conv2d(256, 256, 3, 1, 1),
+#             nn.ReLU(),
+#             nn.MaxPool2d(2, 2),
+#             nn.BatchNorm2d(256),
+#
+#             nn.AdaptiveAvgPool2d((4, 4)),
+#             nn.Flatten(),
+#             nn.Dropout(0.5),
+#             nn.Linear(256 * 16, 128),
+#             nn.Dropout(0.5),
+#             nn.Linear(128, num_classes)
+#         )
+#
+#     def forward(self, x):
+#         x = self.cnn_stack(x)
+#         return x
 
 # class CNN(nn.Module):
 #     def __init__(self):
@@ -280,7 +342,7 @@ def TestModel(model, loss_fn, dataloader):
 
 def UseModel(model, dataset):
     optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
 
     train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData(dataset)
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
@@ -299,7 +361,7 @@ def UseModel(model, dataset):
         val_losses.append(val_loss)
         train_accs.append(train_acc)
         val_accs.append(val_acc)
-        # scheduler.step(val_loss)
+        scheduler.step(val_loss)
 
         print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
         print(f"Val Loss:   {val_loss:.4f}, Val Acc:   {val_acc:.4f}\n")
@@ -335,5 +397,5 @@ def UseModel(model, dataset):
 if __name__ == '__main__':
     assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
     dataset = CustomImageDataset(label_file='dataset/labels.csv', img_dir='dataset', transform=TRANSFORMS)
-    model = CNN(dataset.classes_count).to(DEVICE)
+    model = ResNet(dataset.classes_count).to(DEVICE)
     UseModel(model, dataset)
