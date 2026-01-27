@@ -1,4 +1,4 @@
-#TODO look into bash scripts for running experiments (https://github.com/Delphboy/SuperCap/tree/main)
+#TODO look into using bash scripts (https://github.com/Delphboy/SuperCap/tree/main)
 
 import os
 import pandas as pd
@@ -15,7 +15,6 @@ from sklearn.metrics import classification_report
 LEARNING_RATE = 3e-4
 EPOCHS = 100
 MINIMUM_CLASS_EXAMPLES = 150
-WEIGHT_DECAY = 1e-3
 TRAINING_BATCH_SIZE = 64
 TEST_BATCH_SIZE = 64
 THRESHOLD = 0.3
@@ -218,12 +217,12 @@ def ValidateLoop(dataloader, model, loss_fn):
     return avg_loss, accuracy
 
 
-def TestModel(model, loss_fn, dataloader):
+def TestModel(model, loss_fn, dataloader, num_classes):
     model.eval()
     test_loss = 0
     correct = 0
     total = 0
-    metric = MultilabelF1Score(num_labels=7, average='micro', threshold=0.5).to(DEVICE)
+    metric = MultilabelF1Score(num_labels=num_classes, average='micro', threshold=0.5).to(DEVICE)
 
     all_preds = []
     all_targets = []
@@ -250,7 +249,7 @@ def TestModel(model, loss_fn, dataloader):
     return avg_loss, accuracy, f1_score
 
 
-def UseModel(model, dataset):
+def UseModel(model, dataset, num_classes):
     optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
 
@@ -297,7 +296,7 @@ def UseModel(model, dataset):
     plt.savefig("accuracy_graph.png")
     # plt.show()
 
-    test_loss, test_acc, f1_score = TestModel(model, loss_fn, test_dataloader)
+    test_loss, test_acc, f1_score = TestModel(model, loss_fn, test_dataloader, num_classes)
     print(f'test loss = {test_loss:.4f}')
     print(f'test acc = {test_acc:.4f}')
     print(f'test f1 score = {f1_score:.4f}')
@@ -307,4 +306,4 @@ if __name__ == '__main__':
     assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
     dataset = CustomImageDataset(label_file='dataset/labels.csv', img_dir='dataset', transform=TRANSFORMS)
     model = ResNet(ResidualBlock, [3, 4, 6, 3], num_classes=dataset.classes_count).to(DEVICE)
-    UseModel(model, dataset)
+    UseModel(model, dataset, dataset.classes_count)
