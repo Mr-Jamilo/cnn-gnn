@@ -27,21 +27,21 @@ EPOCHS = 100
 MINIMUM_CLASS_EXAMPLES = 150
 TRAINING_BATCH_SIZE = 64
 TEST_BATCH_SIZE = 64
-THRESHOLD = 0.3
+THRESHOLD = 0.5
 TRANSFORMS = v2.Compose([
     v2.ToImage(),
     v2.Resize((224, 224)),
     # v2.RandomHorizontalFlip(0.5),
     # v2.RandomRotation(degrees=15),
-    # v2.ConvertImageDtype(torch.float),
-    # v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    v2.ConvertImageDtype(torch.float),
+    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
 
 class CustomImageDataset(Dataset):
     def __init__(self, df, valid_labels, transform=None, target_transform=None):
-        self.labels_df = df
+        self.labels_df = df[['ID', 'Disease_Risk'] + valid_labels]
         self.classes_count = len(valid_labels)
         self.valid_labels = valid_labels
         self.transform = transform
@@ -53,7 +53,7 @@ class CustomImageDataset(Dataset):
     def __getitem__(self, index):
         row = self.labels_df.iloc[index]
         img_name = str(row['ID']) + ".png"
-        img_path = os.path.join(TRAIN_DIR, img_name)
+        img_path = os.path.join(TRAIN_DATA, img_name)
         img = Image.open(img_path).convert('RGB')
         labels = [col for col in self.labels_df.columns if col not in ['ID', 'Disease_Risk']]
         labels = torch.tensor(row[labels].values.astype('int'))
@@ -172,15 +172,13 @@ def TrainLoop(dataloader, model, loss_fn, optimiser):
     total = 0
 
     for batch, (X, y) in enumerate(dataloader):
-        # print("DEBUG", f"{y[0]}")
         X, y = X.to(DEVICE), y.to(DEVICE).float()
-
         pred = model(X)
+
         loss = loss_fn(pred, y)
         loss.backward()
         optimiser.step()
         optimiser.zero_grad()
-
         total_loss += loss.item()
 
         preds = torch.sigmoid(pred) > THRESHOLD
@@ -194,7 +192,7 @@ def TrainLoop(dataloader, model, loss_fn, optimiser):
     return avg_loss, accuracy
 
 
-def ValidateLoop(dataloader, model, loss_fn):
+def TestLoop(dataloader, model, loss_fn):
     model.eval()
     val_loss = 0
     correct = 0
@@ -216,7 +214,7 @@ def ValidateLoop(dataloader, model, loss_fn):
     return avg_loss, accuracy
 
 
-def TestModel(model, loss_fn, dataloader, num_classes):
+def EvalModel(model, loss_fn, dataloader, num_classes):
     model.eval()
     test_loss = 0
     correct = 0
@@ -253,8 +251,8 @@ def UseModel(model, dataset_train, dataset_test, dataset_eval, num_classes):
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
 
     train_dataloader, test_dataloader, eval_dataloader, pos_weights = PrepData(dataset_train, dataset_test, dataset_eval)
-    # loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
-    loss_fn = nn.CrossEntropyLoss().to(DEVICE)
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
+    # loss_fn = nn.CrossEntropyLoss().to(DEVICE)
 
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
@@ -262,7 +260,7 @@ def UseModel(model, dataset_train, dataset_test, dataset_eval, num_classes):
     for epoch in range(EPOCHS):
         print(f"Epoch {epoch + 1}/{EPOCHS}")
         train_loss, train_acc = TrainLoop(train_dataloader, model, loss_fn, optimiser)
-        test_loss, test_acc = ValidateLoop(test_dataloader, model, loss_fn)
+        test_loss, test_acc = TestLoop(test_dataloader, model, loss_fn)
 
         train_losses.append(train_loss)
         val_losses.append(test_loss)
@@ -295,7 +293,7 @@ def UseModel(model, dataset_train, dataset_test, dataset_eval, num_classes):
     plt.savefig("accuracy_graph.png")
     # plt.show()
 
-    eval_loss, eval_acc, f1_score = TestModel(model, loss_fn, eval_dataloader, num_classes)
+    eval_loss, eval_acc, f1_score = EvalModel(model, loss_fn, eval_dataloader, num_classes)
     print(f'eval loss = {eval_loss:.4f}')
     print(f'eval acc = {eval_acc:.4f}')
     print(f'eval f1 score = {f1_score:.4f}')
