@@ -1,34 +1,26 @@
-#TODO look into bash scripts for running experiments (https://github.com/Delphboy/SuperCap/tree/main)
+#TODO look into using bash scripts (https://github.com/Delphboy/SuperCap/tree/main)
 
 import os
 import pandas as pd
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-import torchvision.ops
 from torch import nn
 from PIL import Image
-from torchvision.ops import sigmoid_focal_loss
 from torchvision.transforms import v2
 from torch.utils.data import Dataset, random_split, DataLoader
 from torchmetrics.classification import MultilabelF1Score
-from torchvision import models
 from sklearn.metrics import classification_report
 
-LEARNING_RATE = 3e-4
+LEARNING_RATE = 1e-4
 EPOCHS = 100
 MINIMUM_CLASS_EXAMPLES = 150
-WEIGHT_DECAY = 1e-3
 TRAINING_BATCH_SIZE = 64
 TEST_BATCH_SIZE = 64
 THRESHOLD = 0.3
 TRANSFORMS = v2.Compose([
-    v2.ToImage(),
     v2.Resize((224, 224)),
-    v2.RandomHorizontalFlip(0.5),
-    v2.RandomRotation(degrees=15),
-    v2.ConvertImageDtype(torch.float),
-    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    v2.ToTensor(),
 ])
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
@@ -69,40 +61,32 @@ class CustomImageDataset(Dataset):
             labels = self.target_transform(labels)
         return tensor_img, labels
 
-class FocalLoss(nn.Module):
-    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.reduction = reduction
 
-    def forward(self, inputs, targets):
-        return torchvision.ops.sigmoid_focal_loss(
-            inputs,
-            targets,
-            alpha=self.alpha,
-            gamma=self.gamma,
-            reduction=self.reduction
-        )
-
-class CNN(nn.Module):
+class LeNet(nn.Module):
     def __init__(self, num_classes):
-        super().__init__()
-        self.base_model = models.densenet201(weights='DEFAULT')
-        # self.base_model = models.resnet18(weights='DEFAULT')
-        # for param in self.base_model.parameters():
-        #     param.requires_grad = False
-        num_features = self.base_model.classifier.in_features
-        self.base_model.classifier = nn.Sequential(
-            nn.Linear(num_features, 256),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(256, num_classes)
-        )
-
+        super(LeNet, self).__init__()
+        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.AvgPool2d(2)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.relu2 = nn.ReLU()
+        self.pool2 = nn.AvgPool2d(2)
+        self.avgpool = nn.AdaptiveAvgPool2d((4, 4))
+        self.fc1 = nn.Linear(16 * 4 * 4, 120)
+        self.relu3 = nn.ReLU()
+        self.fc2 = nn.Linear(120, 84)
+        self.relu4 = nn.ReLU()
+        self.fc3 = nn.Linear(84, num_classes)
 
     def forward(self, x):
-        return self.base_model(x)
+        out = self.pool1(self.relu1(self.conv1(x)))
+        out = self.pool2(self.relu2(self.conv2(out)))
+        out = self.avgpool(out)
+        out = out.view(out.size(0), -1)
+        out = self.relu3(self.fc1(out))
+        out = self.relu4(self.fc2(out))
+        out = self.fc3(out)
+        return out
 
 def PrepData(dataset):
     df = dataset.data
@@ -198,12 +182,12 @@ def ValidateLoop(dataloader, model, loss_fn):
     return avg_loss, accuracy
 
 
-def TestModel(model, loss_fn, dataloader):
+def TestModel(model, loss_fn, dataloader, num_classes):
     model.eval()
     test_loss = 0
     correct = 0
     total = 0
-    metric = MultilabelF1Score(num_labels=7, average='micro', threshold=0.5).to(DEVICE)
+    metric = MultilabelF1Score(num_labels=num_classes, average='micro', threshold=THRESHOLD).to(DEVICE)
 
     all_preds = []
     all_targets = []
@@ -230,14 +214,13 @@ def TestModel(model, loss_fn, dataloader):
     return avg_loss, accuracy, f1_score
 
 
-def UseModel(model, dataset):
+def UseModel(model, dataset, num_classes):
     optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
 
     train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData(dataset)
     # loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
     loss_fn = nn.CrossEntropyLoss().to(DEVICE)
-    # loss_fn = FocalLoss(alpha=0.4, gamma=2, reduction='mean').to(DEVICE)
 
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
@@ -251,7 +234,7 @@ def UseModel(model, dataset):
         val_losses.append(val_loss)
         train_accs.append(train_acc)
         val_accs.append(val_acc)
-        scheduler.step(val_loss)
+        # scheduler.step(val_loss)
 
         print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
         print(f"Val Loss:   {val_loss:.4f}, Val Acc:   {val_acc:.4f}\n")
@@ -278,14 +261,13 @@ def UseModel(model, dataset):
     plt.savefig("accuracy_graph.png")
     # plt.show()
 
-    test_loss, test_acc, f1_score = TestModel(model, loss_fn, test_dataloader)
+    test_loss, test_acc, f1_score = TestModel(model, loss_fn, test_dataloader, num_classes)
     print(f'test loss = {test_loss:.4f}')
     print(f'test acc = {test_acc:.4f}')
     print(f'test f1 score = {f1_score:.4f}')
 
 
 if __name__ == '__main__':
-    assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
     dataset = CustomImageDataset(label_file='dataset2/labels.csv', img_dir='dataset2', transform=TRANSFORMS)
-    model = CNN(dataset.classes_count).to(DEVICE)
-    UseModel(model, dataset)
+    model = LeNet(dataset.classes_count).to(DEVICE)
+    UseModel(model, dataset, dataset.classes_count)

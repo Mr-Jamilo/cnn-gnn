@@ -146,8 +146,8 @@ def PrepData(dataset):
     pos_weights = torch.tensor(pos_weight_vals, dtype=torch.float32).sqrt()
     # pos_weights = torch.clamp(pos_weights, max=10.0)
 
-    # print(dataset.__getitem__(3))
-    # print(dataset.__len__())
+    # print(dataset2.__getitem__(3))
+    # print(dataset2.__len__())
 
     train_set_size = int(0.8 * dataset.__len__())
     val_set_size = int(0.1 * dataset.__len__())
@@ -319,6 +319,6 @@ def UseModel(model, dataset):
 
 if __name__ == '__main__':
     assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
-    dataset = CustomImageDataset(label_file='dataset/labels.csv', img_dir='dataset', transform=TRANSFORMS)
+    dataset = CustomImageDataset(label_file='dataset2/labels.csv', img_dir='dataset2', transform=TRANSFORMS)
     model = CNN(dataset.classes_count).to(DEVICE)
     UseModel(model, dataset)
