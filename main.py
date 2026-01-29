@@ -31,7 +31,7 @@ THRESHOLD = 0.5
 TRANSFORMS = v2.Compose([
     v2.ToImage(),
     v2.Resize((224, 224)),
-    # v2.RandomHorizontalFlip(0.5),
+    v2.RandomHorizontalFlip(0.5),
     # v2.RandomRotation(degrees=15),
     v2.ConvertImageDtype(torch.float),
     v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
