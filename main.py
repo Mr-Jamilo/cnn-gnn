@@ -31,42 +31,21 @@ THRESHOLD = 0.3
 TRANSFORMS = v2.Compose([
     v2.ToImage(),
     v2.Resize((224, 224)),
-    v2.RandomHorizontalFlip(0.5),
-    v2.RandomRotation(degrees=15),
-    v2.ConvertImageDtype(torch.float),
-    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    # v2.RandomHorizontalFlip(0.5),
+    # v2.RandomRotation(degrees=15),
+    # v2.ConvertImageDtype(torch.float),
+    # v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
 
 class CustomImageDataset(Dataset):
-    def __init__(self, img_dir, split='train', transform=None, target_transform=None):
-
-
-        label_cols = [col for col in train_labels.columns if col not in ['ID', 'Disease_Risk']]
-        class_counts = train_labels[label_cols].sum(axis=0)
-        valid_labels = class_counts[class_counts >= MINIMUM_CLASS_EXAMPLES].index.tolist()
-
-        print(f"Original classes: {len(label_cols)}")
-        print(f"Classes with >= {MINIMUM_CLASS_EXAMPLES} examples: {len(valid_labels)}")
-        print(f"Dropped: {set(label_cols) - set(valid_labels)}")
-
+    def __init__(self, df, valid_labels, transform=None, target_transform=None):
+        self.labels_df = df
         self.classes_count = len(valid_labels)
         self.valid_labels = valid_labels
         self.transform = transform
         self.target_transform = target_transform
-
-        if split == 'train':
-            self.labels_df = train_labels[['ID', 'Disease_Risk'] + valid_labels]
-            self.data_dir = train_data
-        elif split == 'test':
-            self.labels_df = test_labels[['ID', 'Disease_Risk'] + valid_labels]
-            self.data_dir = test_data
-        elif split in ('eval', 'val', 'validation'):
-            self.labels_df = eval_labels[['ID', 'Disease_Risk'] + valid_labels]
-            self.data_dir = eval_data
-        else:
-            raise ValueError(f"Unknown split: {split}")
 
     def __len__(self):
         return len(self.labels_df)
@@ -74,7 +53,7 @@ class CustomImageDataset(Dataset):
     def __getitem__(self, index):
         row = self.labels_df.iloc[index]
         img_name = str(row['ID']) + ".png"
-        img_path = os.path.join(self.data_dir, img_name)
+        img_path = os.path.join(TRAIN_DIR, img_name)
         img = Image.open(img_path).convert('RGB')
         labels = [col for col in self.labels_df.columns if col not in ['ID', 'Disease_Risk']]
         labels = torch.tensor(row[labels].values.astype('int'))
@@ -143,7 +122,15 @@ class ResNet(nn.Module):
         return out
 
 def dropClasses():
+    label_cols = [col for col in TRAIN_LABELS.columns if col not in ['ID', 'Disease_Risk']]
+    class_counts = TRAIN_LABELS[label_cols].sum(axis=0)
+    valid_labels = class_counts[class_counts >= MINIMUM_CLASS_EXAMPLES].index.tolist()
 
+    print(f"Original classes: {len(label_cols)}")
+    print(f"Classes with >= {MINIMUM_CLASS_EXAMPLES} examples: {len(valid_labels)}")
+    print(f"Dropped: {set(label_cols) - set(valid_labels)}")
+
+    return valid_labels
 
 def PrepData(dataset_train, dataset_test, dataset_eval):
     label_cols = [col for col in dataset_train.labels_df.columns if col not in ['ID', 'Disease_Risk']]
@@ -316,9 +303,9 @@ def UseModel(model, dataset_train, dataset_test, dataset_eval, num_classes):
 
 if __name__ == '__main__':
     assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
-    dropClasses()
-    dataset_train = CustomImageDataset(img_dir='dataset', split='train', transform=TRANSFORMS)
-    dataset_test = CustomImageDataset(img_dir='dataset', split='test', transform=TRANSFORMS)
-    dataset_eval = CustomImageDataset(df=, transform=TRANSFORMS)
+    valid_labels = dropClasses()
+    dataset_train = CustomImageDataset(df=TRAIN_LABELS, valid_labels=valid_labels, transform=TRANSFORMS)
+    dataset_test = CustomImageDataset(df=TEST_LABELS, valid_labels=valid_labels, transform=TRANSFORMS)
+    dataset_eval = CustomImageDataset(df=EVAL_LABELS, valid_labels=valid_labels, transform=TRANSFORMS)
     model = ResNet(ResidualBlock, [3, 4, 6, 3], num_classes=dataset_train.classes_count).to(DEVICE)
     UseModel(model, dataset_train, dataset_test, dataset_eval, dataset_train.classes_count)
