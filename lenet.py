@@ -8,12 +8,22 @@ import matplotlib.pyplot as plt
 from torch import nn
 from PIL import Image
 from torchvision.transforms import v2
-from torch.utils.data import Dataset, random_split, DataLoader
+from torch.utils.data import Dataset, DataLoader
 from torchmetrics.classification import MultilabelF1Score
 from sklearn.metrics import classification_report
 
-LEARNING_RATE = 1e-4
-EPOCHS = 100
+TRAIN_DIR = 'dataset/Training_Set/Training_Set'
+TEST_DIR = 'dataset/Test_Set/Test_Set'
+EVAL_DIR = 'dataset/Evaluation_Set/Evaluation_Set'
+TRAIN_LABELS = pd.read_csv(f'{TRAIN_DIR}/RFMiD_Training_Labels.csv')
+TEST_LABELS = pd.read_csv(f'{TEST_DIR}/RFMiD_Testing_Labels.csv')
+EVAL_LABELS = pd.read_csv(f'{EVAL_DIR}/RFMiD_Validation_Labels.csv')
+TRAIN_DATA = f'{TRAIN_DIR}/Training'
+TEST_DATA = f'{TEST_DIR}/Test'
+EVAL_DATA = f'{EVAL_DIR}/Validation'
+
+LEARNING_RATE = 3e-4
+EPOCHS = 200
 MINIMUM_CLASS_EXAMPLES = 150
 TRAINING_BATCH_SIZE = 64
 TEST_BATCH_SIZE = 64
@@ -26,40 +36,28 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
 
 class CustomImageDataset(Dataset):
-    def __init__(self, label_file, img_dir, transform=None, target_transform=None):
-        full_df = pd.read_csv(label_file)
-        label_cols = [col for col in full_df.columns if col not in ['ID', 'Disease_Risk']]
-        class_counts = full_df[label_cols].sum(axis=0)
-        valid_labels = class_counts[class_counts >= MINIMUM_CLASS_EXAMPLES].index.tolist()
-
-        print(f"Original classes: {len(label_cols)}")
-        print(f"Classes with >= {MINIMUM_CLASS_EXAMPLES} examples: {len(valid_labels)}")
-        print(f"Dropped: {set(label_cols) - set(valid_labels)}")
-
+    def __init__(self, df, valid_labels, transform=None, target_transform=None):
+        self.labels_df = df[['ID', 'Disease_Risk'] + valid_labels]
         self.classes_count = len(valid_labels)
-        self.data = full_df[['ID', 'Disease_Risk'] + valid_labels]
-        self.img_dir = img_dir
+        self.valid_labels = valid_labels
         self.transform = transform
         self.target_transform = target_transform
 
     def __len__(self):
-        return len(self.data)
+        return len(self.labels_df)
 
     def __getitem__(self, index):
-        row = self.data.iloc[index]
-        # print(row)
+        row = self.labels_df.iloc[index]
         img_name = str(row['ID']) + ".png"
-        img_path = os.path.join(self.img_dir, img_name)
-        # Image.open(img_path).show()
-        tensor_img = Image.open(img_path).convert('RGB')
-        # tensor_img = decode_image(img_path)
-        labels = [col for col in self.data.columns if col not in ['ID', 'Disease_Risk']]
+        img_path = os.path.join(TRAIN_DATA, img_name)
+        img = Image.open(img_path).convert('RGB')
+        labels = [col for col in self.labels_df.columns if col not in ['ID', 'Disease_Risk']]
         labels = torch.tensor(row[labels].values.astype('int'))
         if self.transform:
-            tensor_img = self.transform(tensor_img)
+            img = self.transform(img)
         if self.target_transform:
             labels = self.target_transform(labels)
-        return tensor_img, labels
+        return img, labels
 
 
 class LeNet(nn.Module):
@@ -88,35 +86,36 @@ class LeNet(nn.Module):
         out = self.fc3(out)
         return out
 
-def PrepData(dataset):
-    df = dataset.data
-    label_cols = [col for col in df.columns if col not in ['ID', 'Disease_Risk']]
-    positives = df[label_cols].sum(axis=0).astype(float)
-    total = len(df)
+def dropClasses():
+    label_cols = [col for col in TRAIN_LABELS.columns if col not in ['ID', 'Disease_Risk']]
+    class_counts = TRAIN_LABELS[label_cols].sum(axis=0)
+    valid_labels = class_counts[class_counts >= MINIMUM_CLASS_EXAMPLES].index.tolist()
+
+    print(f"Original classes: {len(label_cols)}")
+    print(f"Classes with >= {MINIMUM_CLASS_EXAMPLES} examples: {len(valid_labels)}")
+    print(f"Dropped: {set(label_cols) - set(valid_labels)}")
+
+    return valid_labels
+
+def PrepData(dataset_train, dataset_test, dataset_eval):
+    label_cols = [col for col in dataset_train.labels_df.columns if col not in ['ID', 'Disease_Risk']]
+    positives = dataset_train.labels_df[label_cols].sum(axis=0).astype(float)
+    total = len(dataset_train.labels_df)
     negatives = total - positives
     pos_weight_vals = (negatives / (positives + 1e-5)).values
     pos_weights = torch.tensor(pos_weight_vals, dtype=torch.float32).sqrt()
     # pos_weights = torch.clamp(pos_weights, max=10.0)
 
-    # print(dataset2.__getitem__(3))
-    # print(dataset2.__len__())
-
-    train_set_size = int(0.8 * dataset.__len__())
-    val_set_size = int(0.1 * dataset.__len__())
-    test_set_size = dataset.__len__() - train_set_size - val_set_size
+    # print(dataset.__getitem__(3))
+    # print(dataset.__len__())
 
     torch.manual_seed(42)
-    train_data, val_data, test_data = random_split(dataset, [train_set_size, val_set_size, test_set_size])
-    # print(train_data.__len__())
-    # print(test_data.__len__())
-    # print(val_data.__len__())
 
-    train_dataloader = DataLoader(train_data, batch_size=TRAINING_BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True)
-    val_dataloader = DataLoader(val_data, batch_size=TEST_BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True)
-    test_dataloader = DataLoader(test_data, batch_size=TEST_BATCH_SIZE, shuffle=False, num_workers=8, pin_memory=True)
+    train_dataloader = DataLoader(dataset_train, batch_size=TRAINING_BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True)
+    test_dataloader = DataLoader(dataset_test, batch_size=TEST_BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True)
+    eval_dataloader = DataLoader(dataset_eval, batch_size=TEST_BATCH_SIZE, shuffle=False, num_workers=8, pin_memory=True)
 
-    return train_dataloader, val_dataloader, test_dataloader, pos_weights
-    # return train_dataloader
+    return train_dataloader, test_dataloader, eval_dataloader, pos_weights
 
 
 def DisplayData(train_dataloader):
@@ -160,7 +159,7 @@ def TrainLoop(dataloader, model, loss_fn, optimiser):
     return avg_loss, accuracy
 
 
-def ValidateLoop(dataloader, model, loss_fn):
+def TestLoop(dataloader, model, loss_fn):
     model.eval()
     val_loss = 0
     correct = 0
@@ -182,7 +181,7 @@ def ValidateLoop(dataloader, model, loss_fn):
     return avg_loss, accuracy
 
 
-def TestModel(model, loss_fn, dataloader, num_classes):
+def EvalModel(model, loss_fn, dataloader, num_classes):
     model.eval()
     test_loss = 0
     correct = 0
@@ -214,11 +213,11 @@ def TestModel(model, loss_fn, dataloader, num_classes):
     return avg_loss, accuracy, f1_score
 
 
-def UseModel(model, dataset, num_classes):
+def UseModel(model, dataset_train, dataset_test, dataset_eval, num_classes):
     optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
     # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
 
-    train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData(dataset)
+    train_dataloader, test_dataloader, eval_dataloader, pos_weights = PrepData(dataset_train, dataset_test, dataset_eval)
     # loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
     loss_fn = nn.CrossEntropyLoss().to(DEVICE)
 
@@ -228,21 +227,21 @@ def UseModel(model, dataset, num_classes):
     for epoch in range(EPOCHS):
         print(f"Epoch {epoch + 1}/{EPOCHS}")
         train_loss, train_acc = TrainLoop(train_dataloader, model, loss_fn, optimiser)
-        val_loss, val_acc = ValidateLoop(val_dataloader, model, loss_fn)
+        test_loss, test_acc = TestLoop(test_dataloader, model, loss_fn)
 
         train_losses.append(train_loss)
-        val_losses.append(val_loss)
+        val_losses.append(test_loss)
         train_accs.append(train_acc)
-        val_accs.append(val_acc)
-        # scheduler.step(val_loss)
+        val_accs.append(test_acc)
+        # scheduler.step(test_loss)
 
         print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
-        print(f"Val Loss:   {val_loss:.4f}, Val Acc:   {val_acc:.4f}\n")
+        print(f"Test Loss:   {test_loss:.4f}, Test Acc:   {test_acc:.4f}\n")
     print("done")
 
     plt.figure(figsize=(10, 5))
     plt.plot(train_losses, label='Train Loss')
-    plt.plot(val_losses, label='Val Loss')
+    plt.plot(val_losses, label='Test Loss')
     plt.title('Loss over Epochs')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
@@ -253,7 +252,7 @@ def UseModel(model, dataset, num_classes):
     # --- Plot Accuracy ---
     plt.figure(figsize=(10, 5))
     plt.plot(train_accs, label='Train Accuracy')
-    plt.plot(val_accs, label='Val Accuracy')
+    plt.plot(val_accs, label='Test Accuracy')
     plt.title('Accuracy over Epochs')
     plt.xlabel('Epoch')
     plt.ylabel('Accuracy')
@@ -261,13 +260,17 @@ def UseModel(model, dataset, num_classes):
     plt.savefig("accuracy_graph.png")
     # plt.show()
 
-    test_loss, test_acc, f1_score = TestModel(model, loss_fn, test_dataloader, num_classes)
-    print(f'test loss = {test_loss:.4f}')
-    print(f'test acc = {test_acc:.4f}')
-    print(f'test f1 score = {f1_score:.4f}')
+    eval_loss, eval_acc, f1_score = EvalModel(model, loss_fn, eval_dataloader, num_classes)
+    print(f'eval loss = {eval_loss:.4f}')
+    print(f'eval acc = {eval_acc:.4f}')
+    print(f'eval f1 score = {f1_score:.4f}')
 
 
 if __name__ == '__main__':
-    dataset = CustomImageDataset(label_file='dataset2/labels.csv', img_dir='dataset2', transform=TRANSFORMS)
-    model = LeNet(dataset.classes_count).to(DEVICE)
-    UseModel(model, dataset, dataset.classes_count)
+    assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
+    valid_labels = dropClasses()
+    dataset_train = CustomImageDataset(df=TRAIN_LABELS, valid_labels=valid_labels, transform=TRANSFORMS)
+    dataset_test = CustomImageDataset(df=TEST_LABELS, valid_labels=valid_labels, transform=TRANSFORMS)
+    dataset_eval = CustomImageDataset(df=EVAL_LABELS, valid_labels=valid_labels, transform=TRANSFORMS)
+    model = LeNet(num_classes=dataset_train.classes_count).to(DEVICE)
+    UseModel(model, dataset_train, dataset_test, dataset_eval, dataset_train.classes_count)
