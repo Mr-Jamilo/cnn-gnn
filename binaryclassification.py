@@ -7,100 +7,128 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torch import nn
 from PIL import Image
+from torch.nn import CrossEntropyLoss
 from torchvision.transforms import v2
 from torch.utils.data import Dataset, DataLoader
-from torchmetrics.classification import MultilabelF1Score
+from torchmetrics.classification import BinaryF1Score
 from sklearn.metrics import classification_report
 
 TRAIN_DIR = 'dataset/Training_Set/Training_Set'
-VAL_DIR = 'dataset/Evaluation_Set/Evaluation_Set'
-TEST_DIR = 'dataset/Test_Set/Test_Set'
 TRAIN_LABELS = pd.read_csv(f'{TRAIN_DIR}/RFMiD_Training_Labels.csv')
-VAL_LABELS = pd.read_csv(f'{VAL_DIR}/RFMiD_Validation_Labels.csv')
-TEST_LABELS = pd.read_csv(f'{TEST_DIR}/RFMiD_Testing_Labels.csv')
+TRAIN_LABELS = TRAIN_LABELS[['ID', 'Disease_Risk']]
 TRAIN_DATA = f'{TRAIN_DIR}/Training'
+
+VAL_DIR = 'dataset/Evaluation_Set/Evaluation_Set'
+VAL_LABELS = pd.read_csv(f'{VAL_DIR}/RFMiD_Validation_Labels.csv')
+VAL_LABELS = VAL_LABELS[['ID', 'Disease_Risk']]
 VAL_DATA = f'{VAL_DIR}/Validation'
+
+TEST_DIR = 'dataset/Test_Set/Test_Set'
+TEST_LABELS = pd.read_csv(f'{TEST_DIR}/RFMiD_Testing_Labels.csv')
+TEST_LABELS = TEST_LABELS[['ID', 'Disease_Risk']]
 TEST_DATA = f'{TEST_DIR}/Test'
 
-LEARNING_RATE = 1e-3
+LEARNING_RATE = 1e-5
 EPOCHS = 100
-MINIMUM_CLASS_EXAMPLES = 0
 TRAINING_BATCH_SIZE = 64
 TEST_BATCH_SIZE = 64
 THRESHOLD = 0.5
 TRANSFORMS = v2.Compose([
+    # v2.ToImage(),
     v2.Resize((224, 224)),
     v2.ToTensor(),
+    # v2.RandomHorizontalFlip(0.5),
+    # v2.RandomRotation(degrees=15),
+    # v2.ConvertImageDtype(torch.float),
+    # v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
 
 class CustomImageDataset(Dataset):
-    def __init__(self, df, valid_labels, transform=None, target_transform=None):
-        self.labels_df = df[['ID', 'Disease_Risk'] + valid_labels]
-        self.classes_count = len(valid_labels)
-        self.valid_labels = valid_labels
+    def __init__(self, df, img_dir,transform=None, target_transform=None):
+        self.df = df
+        self.img_dir = img_dir
         self.transform = transform
         self.target_transform = target_transform
 
     def __len__(self):
-        return len(self.labels_df)
+        return len(self.df)
 
     def __getitem__(self, index):
-        row = self.labels_df.iloc[index]
+        row = self.df.iloc[index]
         img_name = str(row['ID']) + ".png"
-        img_path = os.path.join(TRAIN_DATA, img_name)
+        img_path = os.path.join(self.img_dir, img_name)
         img = Image.open(img_path).convert('RGB')
-        labels = [col for col in self.labels_df.columns if col not in ['ID', 'Disease_Risk']]
-        labels = torch.tensor(row[labels].values.astype('int'))
+        labels = torch.tensor(row['Disease_Risk'])
         if self.transform:
             img = self.transform(img)
         if self.target_transform:
             labels = self.target_transform(labels)
         return img, labels
 
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
 
-class LeNet(nn.Module):
-    def __init__(self, num_classes):
-        super(LeNet, self).__init__()
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.relu1 = nn.ReLU()
-        self.pool1 = nn.AvgPool2d(2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.relu2 = nn.ReLU()
-        self.pool2 = nn.AvgPool2d(2)
-        self.avgpool = nn.AdaptiveAvgPool2d((4, 4))
-        self.fc1 = nn.Linear(16 * 4 * 4, 120)
-        self.relu3 = nn.ReLU()
-        self.fc2 = nn.Linear(120, 84)
-        self.relu4 = nn.ReLU()
-        self.fc3 = nn.Linear(84, num_classes)
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
 
     def forward(self, x):
-        out = self.pool1(self.relu1(self.conv1(x)))
-        out = self.pool2(self.relu2(self.conv2(out)))
-        out = self.avgpool(out)
-        out = out.view(out.size(0), -1)
-        out = self.relu3(self.fc1(out))
-        out = self.relu4(self.fc2(out))
-        out = self.fc3(out)
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)
+        out = self.relu(out)
         return out
 
-def dropClasses():
-    label_cols = [col for col in TRAIN_LABELS.columns if col not in ['ID', 'Disease_Risk']]
-    class_counts = TRAIN_LABELS[label_cols].sum(axis=0)
-    valid_labels = class_counts[class_counts >= MINIMUM_CLASS_EXAMPLES].index.tolist()
+class ResNet(nn.Module):
+    def __init__(self, block, num_blocks):
+        super(ResNet, self).__init__()
+        self.in_channels = 32
 
-    print(f"Original classes: {len(label_cols)}")
-    print(f"Classes with >= {MINIMUM_CLASS_EXAMPLES} examples: {len(valid_labels)}")
-    print(f"Dropped: {set(label_cols) - set(valid_labels)}")
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.relu = nn.ReLU(inplace=True)
+        self.layer1 = self._make_layer(block, 32, num_blocks[0], stride=1)
+        self.layer2 = self._make_layer(block, 64, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, 128, num_blocks[2], stride=2)
+        self.layer4 = self._make_layer(block, 256, num_blocks[3], stride=2)
+        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.flatten = nn.Flatten()
+        self.linear = nn.Linear(256, 1)
 
-    return valid_labels
+    def _make_layer(self, block, out_channels, num_blocks, stride):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for stride in strides:
+            layers.append(block(self.in_channels, out_channels, stride))
+            self.in_channels = out_channels
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.layer4(out)
+        out = self.avg_pool(out)
+        out = self.flatten(out)
+        out = self.linear(out)
+        return out
 
 def PrepData(dataset_train, dataset_val, dataset_test):
-    label_cols = [col for col in dataset_train.labels_df.columns if col not in ['ID', 'Disease_Risk']]
-    positives = dataset_train.labels_df[label_cols].sum(axis=0).astype(float)
-    total = len(dataset_train.labels_df)
+    label_cols = [col for col in dataset_train.df.columns if col not in ['ID']]
+    positives = dataset_train.df[label_cols].sum(axis=0).astype(float)
+    total = len(dataset_train.df)
     negatives = total - positives
     pos_weight_vals = (negatives / (positives + 1e-5)).values
     pos_weights = torch.tensor(pos_weight_vals, dtype=torch.float32).sqrt()
@@ -112,10 +140,11 @@ def PrepData(dataset_train, dataset_val, dataset_test):
     torch.manual_seed(42)
 
     train_dataloader = DataLoader(dataset_train, batch_size=TRAINING_BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True)
-    val_dataloader = DataLoader(dataset_val, batch_size=TEST_BATCH_SIZE, shuffle=False, num_workers=8, pin_memory=True)
+    val_dataloader = DataLoader(dataset_val, batch_size=TEST_BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True)
     test_dataloader = DataLoader(dataset_test, batch_size=TEST_BATCH_SIZE, shuffle=False, num_workers=8, pin_memory=True)
 
     return train_dataloader, val_dataloader, test_dataloader, pos_weights
+
 
 def train_one_epoch(dataloader, model, loss_fn, optimiser):
     loss_list = []
@@ -124,7 +153,7 @@ def train_one_epoch(dataloader, model, loss_fn, optimiser):
 
     for i, data in enumerate(dataloader):
         inputs, targets = data
-        inputs, targets = inputs.to(DEVICE), targets.to(DEVICE).float()
+        inputs, targets = inputs.to(DEVICE), targets.to(DEVICE).float().unsqueeze(1)
         optimiser.zero_grad()
         outputs = model(inputs)
         loss = loss_fn(outputs, targets)
@@ -144,12 +173,12 @@ def train_one_epoch(dataloader, model, loss_fn, optimiser):
     # return avg_loss, accuracy
     return avg_loss
 
-def TestModel(model, loss_fn, dataloader, num_classes):
+def TestModel(model, loss_fn, dataloader):
     model.eval()
     test_loss = 0
     correct = 0
     total = 0
-    metric = MultilabelF1Score(num_labels=num_classes, average='micro', threshold=THRESHOLD).to(DEVICE)
+    metric = BinaryF1Score(threshold=0.5).to(DEVICE)
 
     all_preds = []
     all_targets = []
@@ -175,14 +204,14 @@ def TestModel(model, loss_fn, dataloader, num_classes):
 
     return avg_loss, accuracy, f1_score
 
-def UseModel(model, dataset_train, dataset_val, dataset_test, num_classes):
+
+def UseModel(model, dataset_train, dataset_val, dataset_test):
     optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
 
     train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData(dataset_train, dataset_val, dataset_test)
-    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
-    # loss_fn = nn.BCEWithLogitsLoss()
-    # loss_fn = nn.CrossEntropyLoss().to(DEVICE)
+    loss_fn = nn.BCEWithLogitsLoss()
+    # loss_fn = CrossEntropyLoss().to(DEVICE)
 
     patience = 5
     counter = 0
@@ -202,7 +231,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test, num_classes):
         total = 0
         with torch.no_grad():
             for inputs, labels in val_dataloader:
-                inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float()
+                inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)
                 outputs = model(inputs)
                 running_val_loss += loss_fn(outputs, labels).item()
                 outputs = torch.sigmoid(outputs) > THRESHOLD
@@ -216,6 +245,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test, num_classes):
         val_losses.append(val_loss)
         # train_accs.append(train_acc)
         val_accs.append(val_acc)
+        # scheduler.step(val_loss)
 
         # print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
         print(f"Val   Loss: {val_loss:.4f}, Val   Acc: {val_acc:.4f}\n")
@@ -255,16 +285,16 @@ def UseModel(model, dataset_train, dataset_val, dataset_test, num_classes):
     # plt.show()
 
     model.load_state_dict(torch.load('model.pth'))
-    test_loss, test_acc, f1_score = TestModel(model, loss_fn, test_dataloader, num_classes)
+    test_loss, test_acc, f1_score = TestModel(model, loss_fn, test_dataloader)
     print(f'test loss = {test_loss:.4f}')
     print(f'test acc = {test_acc:.4f}')
     print(f'test f1 score = {f1_score:.4f}')
 
+
 if __name__ == '__main__':
     assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
-    valid_labels = dropClasses()
-    dataset_train = CustomImageDataset(df=TRAIN_LABELS, valid_labels=valid_labels, transform=TRANSFORMS)
-    dataset_val = CustomImageDataset(df=VAL_LABELS, valid_labels=valid_labels, transform=TRANSFORMS)
-    dataset_test = CustomImageDataset(df=TEST_LABELS, valid_labels=valid_labels, transform=TRANSFORMS)
-    model = LeNet(num_classes=dataset_train.classes_count).to(DEVICE)
-    UseModel(model, dataset_train, dataset_val, dataset_test, dataset_train.classes_count)
+    dataset_train = CustomImageDataset(df=TRAIN_LABELS, img_dir=TRAIN_DATA, transform=TRANSFORMS)
+    dataset_val = CustomImageDataset(df=VAL_LABELS, img_dir=VAL_DATA, transform=TRANSFORMS)
+    dataset_test = CustomImageDataset(df=TEST_LABELS, img_dir=TEST_DATA, transform=TRANSFORMS)
+    model = ResNet(ResidualBlock, [2, 2, 2, 2]).to(DEVICE)
+    UseModel(model, dataset_train, dataset_val, dataset_test)

@@ -15,6 +15,16 @@ from torchmetrics.classification import MultilabelF1Score
 from torchvision import models
 from sklearn.metrics import classification_report
 
+TRAIN_DIR = 'dataset/Training_Set/Training_Set'
+VAL_DIR = 'dataset/Evaluation_Set/Evaluation_Set'
+TEST_DIR = 'dataset/Test_Set/Test_Set'
+TRAIN_LABELS = pd.read_csv(f'{TRAIN_DIR}/RFMiD_Training_Labels.csv')
+VAL_LABELS = pd.read_csv(f'{VAL_DIR}/RFMiD_Validation_Labels.csv')
+TEST_LABELS = pd.read_csv(f'{TEST_DIR}/RFMiD_Testing_Labels.csv')
+TRAIN_DATA = f'{TRAIN_DIR}/Training'
+VAL_DATA = f'{VAL_DIR}/Validation'
+TEST_DATA = f'{TEST_DIR}/Test'
+
 LEARNING_RATE = 3e-4
 EPOCHS = 100
 MINIMUM_CLASS_EXAMPLES = 150
@@ -69,27 +79,10 @@ class CustomImageDataset(Dataset):
             labels = self.target_transform(labels)
         return tensor_img, labels
 
-class FocalLoss(nn.Module):
-    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.reduction = reduction
-
-    def forward(self, inputs, targets):
-        return torchvision.ops.sigmoid_focal_loss(
-            inputs,
-            targets,
-            alpha=self.alpha,
-            gamma=self.gamma,
-            reduction=self.reduction
-        )
-
 class CNN(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
-        self.base_model = models.densenet201(weights='DEFAULT')
-        # self.base_model = models.resnet18(weights='DEFAULT')
+        self.base_model = models.resnet50(weights='DEFAULT')
         # for param in self.base_model.parameters():
         #     param.requires_grad = False
         num_features = self.base_model.classifier.in_features
@@ -237,7 +230,6 @@ def UseModel(model, dataset):
     train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData(dataset)
     # loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
     loss_fn = nn.CrossEntropyLoss().to(DEVICE)
-    # loss_fn = FocalLoss(alpha=0.4, gamma=2, reduction='mean').to(DEVICE)
 
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
@@ -286,6 +278,9 @@ def UseModel(model, dataset):
 
 if __name__ == '__main__':
     assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
-    dataset = CustomImageDataset(label_file='dataset2/labels.csv', img_dir='dataset2', transform=TRANSFORMS)
-    model = CNN(dataset.classes_count).to(DEVICE)
-    UseModel(model, dataset)
+    valid_labels = dropClasses()
+    dataset_train = CustomImageDataset(df=TRAIN_LABELS, valid_labels=valid_labels, transform=TRANSFORMS)
+    dataset_val = CustomImageDataset(df=VAL_LABELS, valid_labels=valid_labels, transform=TRANSFORMS)
+    dataset_test = CustomImageDataset(df=TEST_LABELS, valid_labels=valid_labels, transform=TRANSFORMS)
+    model = LeNet(num_classes=dataset_train.classes_count).to(DEVICE)
+    UseModel(model, dataset_train, dataset_val, dataset_test, dataset_train.classes_count)
