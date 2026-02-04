@@ -7,7 +7,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torch import nn
 from PIL import Image
-from torch.nn import CrossEntropyLoss
 from torchvision.transforms import v2
 from torch.utils.data import Dataset, DataLoader
 from torchmetrics.classification import BinaryF1Score
@@ -34,13 +33,13 @@ TRAINING_BATCH_SIZE = 64
 TEST_BATCH_SIZE = 64
 THRESHOLD = 0.5
 TRANSFORMS = v2.Compose([
-    # v2.ToImage(),
+    v2.ToImage(),
     v2.Resize((224, 224)),
-    v2.ToTensor(),
-    # v2.RandomHorizontalFlip(0.5),
-    # v2.RandomRotation(degrees=15),
-    # v2.ConvertImageDtype(torch.float),
-    # v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    v2.RandomHorizontalFlip(0.5),
+    v2.RandomRotation(degrees=15),
+    v2.ConvertImageDtype(torch.float),
+    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    # v2.ToTensor(),
 ])
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
@@ -125,6 +124,33 @@ class ResNet(nn.Module):
         out = self.linear(out)
         return out
 
+class EarlyStopping:
+    def __init__(self, patience=5, delta=0):
+        self.patience = patience
+        self.delta = delta
+        self.best_score = None
+        self.early_stop = False
+        self.counter = 0
+        self.best_model_state = None
+
+    def __call__(self, val_loss, model):
+        score = -val_loss
+
+        if self.best_score is None:
+            self.best_score = score
+            self.best_model_state = model.state_dict()
+        elif score < self.best_score + self.delta:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.best_model_state = model.state_dict()
+            self.counter = 0
+
+    def load_best_model(self, model):
+        model.load_state_dict(self.best_model_state)
+
 def PrepData(dataset_train, dataset_val, dataset_test):
     label_cols = [col for col in dataset_train.df.columns if col not in ['ID']]
     positives = dataset_train.df[label_cols].sum(axis=0).astype(float)
@@ -184,16 +210,16 @@ def TestModel(model, loss_fn, dataloader):
     all_targets = []
 
     with torch.no_grad():
-        for X, y in dataloader:
-            X, y = X.to(DEVICE), y.to(DEVICE).float()
-            pred = model(X)
-            test_loss += loss_fn(pred, y).item()
+        for inputs, labels in dataloader:
+            inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)
+            pred = model(inputs)
+            test_loss += loss_fn(pred, labels).item()
             preds = torch.sigmoid(pred) > THRESHOLD
-            correct += (preds == y.bool()).sum().item()
-            total += y.numel()
-            metric.update(pred, y)
+            correct += (preds == labels.bool()).sum().item()
+            total += labels.numel()
+            metric.update(pred, labels)
             all_preds.append(preds.cpu().numpy())
-            all_targets.append(y.cpu().numpy())
+            all_targets.append(labels.cpu().numpy())
     avg_loss = test_loss / len(dataloader)
     accuracy = correct / total
     f1_score = metric.compute().item()
@@ -208,6 +234,7 @@ def TestModel(model, loss_fn, dataloader):
 def UseModel(model, dataset_train, dataset_val, dataset_test):
     optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
+    early_stopping = EarlyStopping(patience=10, delta=0.01)
 
     train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData(dataset_train, dataset_val, dataset_test)
     loss_fn = nn.BCEWithLogitsLoss()
@@ -247,20 +274,13 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
         val_accs.append(val_acc)
         # scheduler.step(val_loss)
 
+        early_stopping(val_loss, model)
+        if early_stopping.early_stop:
+            print("Early stopping")
+            break
+
         # print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
         print(f"Val   Loss: {val_loss:.4f}, Val   Acc: {val_acc:.4f}\n")
-
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            counter = 0
-            torch.save(model.state_dict(), 'model.pth')
-            print("--> Validation loss improved, model saved.")
-        else:
-            counter += 1
-            print(f"--> No improvement for {counter}/{patience} epochs.")
-            if counter >= patience:
-                print("EARLY STOPPING TRIGGERED. Training terminated.")
-                break
     print("done")
 
     plt.figure(figsize=(10, 5))
@@ -284,7 +304,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
     plt.savefig("accuracy_graph.png")
     # plt.show()
 
-    model.load_state_dict(torch.load('model.pth'))
+    early_stopping.load_best_model(model)
     test_loss, test_acc, f1_score = TestModel(model, loss_fn, test_dataloader)
     print(f'test loss = {test_loss:.4f}')
     print(f'test acc = {test_acc:.4f}')
