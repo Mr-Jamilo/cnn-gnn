@@ -14,32 +14,42 @@ from sklearn.metrics import classification_report
 
 TRAIN_DIR = 'dataset/Training_Set/Training_Set'
 TRAIN_LABELS = pd.read_csv(f'{TRAIN_DIR}/RFMiD_Training_Labels.csv')
-TRAIN_LABELS.drop(columns='Disease_Risk', inplace=True)
+TRAIN_LABELS = TRAIN_LABELS[['ID', 'DR', 'MH', 'TSLN', 'ODC']]
+# TRAIN_LABELS.drop(columns='Disease_Risk', inplace=True)
 TRAIN_DATA = f'{TRAIN_DIR}/Training'
 
 VAL_DIR = 'dataset/Evaluation_Set/Evaluation_Set'
 VAL_LABELS = pd.read_csv(f'{VAL_DIR}/RFMiD_Validation_Labels.csv')
-VAL_LABELS.drop(columns='Disease_Risk', inplace=True)
+VAL_LABELS = VAL_LABELS[['ID', 'DR', 'MH', 'TSLN', 'ODC']]
+# VAL_LABELS.drop(columns='Disease_Risk', inplace=True)
 VAL_DATA = f'{VAL_DIR}/Validation'
 
 TEST_DIR = 'dataset/Test_Set/Test_Set'
 TEST_LABELS = pd.read_csv(f'{TEST_DIR}/RFMiD_Testing_Labels.csv')
-TEST_LABELS.drop(columns='Disease_Risk', inplace=True)
+TEST_LABELS = TEST_LABELS[['ID', 'DR', 'MH', 'TSLN', 'ODC']]
+# TEST_LABELS.drop(columns='Disease_Risk', inplace=True)
 TEST_DATA = f'{TEST_DIR}/Test'
 
+NUM_CLASSES = 4
 LEARNING_RATE = 1e-4
 EPOCHS = 100
-TRAINING_BATCH_SIZE = 64
-TEST_BATCH_SIZE = 64
-THRESHOLD = 0.5
-TRANSFORMS = v2.Compose([
+TRAINING_BATCH_SIZE = 32
+TEST_BATCH_SIZE = 32
+TRAIN_TRANSFORMS = v2.Compose([
     v2.ToImage(),
     v2.Resize((224, 224)),
-    # v2.RandomHorizontalFlip(0.5),
-    # v2.RandomRotation(degrees=15),
+    v2.RandomHorizontalFlip(0.5),
+    v2.RandomRotation(degrees=15),
     v2.ConvertImageDtype(torch.float),
-    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
+TEST_TRANSFORMS = v2.Compose([
+    v2.ToImage(),
+    v2.Resize((224, 224)),
+    v2.ConvertImageDtype(torch.float),
+    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
 
@@ -58,7 +68,8 @@ class CustomImageDataset(Dataset):
         img_name = str(row['ID']) + ".png"
         img_path = os.path.join(self.img_dir, img_name)
         img = Image.open(img_path).convert('RGB')
-        labels = torch.tensor(row.drop('ID').values)
+
+        labels = torch.tensor(row.drop('ID').values, dtype=torch.float32)
         if self.transform:
             img = self.transform(img)
         if self.target_transform:
@@ -91,18 +102,19 @@ class ResidualBlock(nn.Module):
 class ResNet(nn.Module):
     def __init__(self, block, num_blocks):
         super(ResNet, self).__init__()
-        self.in_channels = 32
+        self.in_channels = 64
 
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1)
+        self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
-        self.layer1 = self._make_layer(block, 32, num_blocks[0], stride=1)
-        self.layer2 = self._make_layer(block, 64, num_blocks[1], stride=2)
-        self.layer3 = self._make_layer(block, 128, num_blocks[2], stride=2)
-        self.layer4 = self._make_layer(block, 256, num_blocks[3], stride=2)
+        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
+        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
         self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.dropout = nn.Dropout(0.5)
         self.flatten = nn.Flatten()
-        self.linear = nn.Linear(256, 45)
+        self.linear = nn.Linear(512, NUM_CLASSES)
 
     def _make_layer(self, block, out_channels, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)
@@ -119,18 +131,46 @@ class ResNet(nn.Module):
         out = self.layer3(out)
         out = self.layer4(out)
         out = self.avg_pool(out)
+        out = self.dropout(out)
         out = self.flatten(out)
         out = self.linear(out)
         return out
+
+class EarlyStopping:
+    def __init__(self, patience=5, delta=0):
+        self.patience = patience
+        self.delta = delta
+        self.best_score = None
+        self.early_stop = False
+        self.counter = 0
+        self.best_model_state = None
+
+    def __call__(self, val_loss, model):
+        score = -val_loss
+
+        if self.best_score is None:
+            self.best_score = score
+            self.best_model_state = model.state_dict()
+        elif score < self.best_score + self.delta:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.best_model_state = model.state_dict()
+            self.counter = 0
+
+    def load_best_model(self, model):
+        model.load_state_dict(self.best_model_state)
 
 def PrepData(dataset_train, dataset_val, dataset_test):
     label_cols = [col for col in dataset_train.df.columns if col not in ['ID']]
     positives = dataset_train.df[label_cols].sum(axis=0).astype(float)
     total = len(dataset_train.df)
     negatives = total - positives
-    pos_weight_vals = (negatives / (positives + 1e-5)).values
-    pos_weights = torch.tensor(pos_weight_vals, dtype=torch.float32).sqrt()
-    # pos_weights = torch.clamp(pos_weights, max=10.0)
+    pos_weight_vals = (negatives / positives).values
+    pos_weights = torch.tensor(pos_weight_vals, dtype=torch.float32)
+    # pos_weights = torch.clamp(pos_weights, max=200.0)
 
     # print(dataset.__getitem__(3))
     # print(dataset.__len__())
@@ -144,75 +184,56 @@ def PrepData(dataset_train, dataset_val, dataset_test):
     return train_dataloader, val_dataloader, test_dataloader, pos_weights
 
 
-def TrainLoop(dataloader, model, loss_fn, optimiser):
-    size = len(dataloader.dataset)
-    model.train()
-    total_loss = 0
+def train_one_epoch(dataloader, model, loss_fn, optimiser):
+    loss_list = []
+    correct_list = []
     correct = 0
     total = 0
+    f1 = MultilabelF1Score(num_labels=NUM_CLASSES).to(DEVICE)
 
-    for batch, (X, y) in enumerate(dataloader):
-        X, y = X.to(DEVICE), y.to(DEVICE).float()
-        pred = model(X)
-        loss = loss_fn(pred, y)
+    for batch, data in enumerate(dataloader):
+        inputs, targets = data
+        inputs, targets = inputs.to(DEVICE), targets.to(DEVICE).float()
+        optimiser.zero_grad()
+        outputs = model(inputs)
+        loss = loss_fn(outputs, targets)
         loss.backward()
         optimiser.step()
-        optimiser.zero_grad()
-        total_loss += loss.item()
-        preds = torch.sigmoid(pred) > THRESHOLD
-        correct += (preds == y.bool()).sum().item()
-        total += y.numel()
+        loss_list.append(loss.item())
+        outputs = outputs > 0.
+        f1.update(outputs, targets)
 
-        loss, current = loss.item(), batch * TRAINING_BATCH_SIZE + len(X)
-        print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
-    avg_loss = total_loss / len(dataloader)
-    accuracy = correct / total
-    return avg_loss, accuracy
+        correct += (outputs == targets.bool()).sum().item()
+        total += targets.numel()
 
+        print(f"  Batch {batch + 1}/{len(dataloader)} - Loss: {loss.item():.4f} - Acc: {(correct/total):.4f}", end='\r')
 
-def ValLoop(dataloader, model, loss_fn):
-    model.eval()
-    val_loss = 0
-    correct = 0
-    total = 0
-    total_positive_preds = 0
-
-    with torch.no_grad():
-        for X, y in dataloader:
-            X, y = X.to(DEVICE), y.to(DEVICE).float()
-            pred = model(X)
-            val_loss += loss_fn(pred, y).item()
-            preds = torch.sigmoid(pred) > THRESHOLD
-            total_positive_preds += preds.sum().item()
-            correct += (preds == y.bool()).sum().item()
-            total += y.numel()
-    print(f"DEBUG: Total positive predictions in Validation: {total_positive_preds}")
-    avg_loss = val_loss / len(dataloader)
-    accuracy = correct / total
-    return avg_loss, accuracy
-
+    avg_loss = np.mean(loss_list)
+    avg_accuracy = correct / total
+    f1 = f1.compute().item()
+    return avg_loss, avg_accuracy, f1
 
 def TestModel(model, loss_fn, dataloader):
     model.eval()
     test_loss = 0
     correct = 0
     total = 0
-    metric = MultilabelF1Score(num_labels=45, average='micro', threshold=0.5).to(DEVICE)
+    metric = MultilabelF1Score(num_labels=NUM_CLASSES).to(DEVICE)
 
     all_preds = []
     all_targets = []
 
     with torch.no_grad():
-        for X, y in dataloader:
-            X, y = X.to(DEVICE), y.to(DEVICE).float()
-            pred = model(X)
-            test_loss += loss_fn(pred, y).item()
-            preds = torch.sigmoid(pred) > THRESHOLD
-            correct += (preds == y.bool()).sum().item()
-            total += y.numel()
-            metric.update(pred, y)
-            all_preds.append(preds.cpu().numpy())
-            all_targets.append(y.cpu().numpy())
+        for inputs, labels in dataloader:
+            inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float()
+            outputs = model(inputs)
+            test_loss += loss_fn(outputs, labels).item()
+            outputs = outputs > 0.
+            correct += (outputs == labels.bool()).sum().item()
+            total += labels.numel()
+            metric.update(outputs, labels)
+            all_preds.append(outputs.cpu().numpy())
+            all_targets.append(labels.cpu().numpy())
     avg_loss = test_loss / len(dataloader)
     accuracy = correct / total
     f1_score = metric.compute().item()
@@ -225,28 +246,64 @@ def TestModel(model, loss_fn, dataloader):
 
 
 def UseModel(model, dataset_train, dataset_val, dataset_test):
-    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
+    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-3)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=10)
+    early_stopping = EarlyStopping(patience=100, delta=0.0001)
 
     train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData(dataset_train, dataset_val, dataset_test)
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
 
+    patience = 5
+    counter = 0
+    best_val_loss = np.inf
+
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
+    train_f1s, val_f1s = [], []
 
     for epoch in range(EPOCHS):
         print(f"Epoch {epoch + 1}/{EPOCHS}")
-        train_loss, train_acc = TrainLoop(train_dataloader, model, loss_fn, optimiser)
-        val_loss, val_acc = ValLoop(val_dataloader, model, loss_fn)
+        model.train(True)
+        train_loss, train_acc, train_f1 = train_one_epoch(train_dataloader, model, loss_fn, optimiser)
+        # train_loss = train_one_epoch(train_dataloader, model, loss_fn, optimiser)
+        model.eval()
+        running_val_loss = 0.0
+        correct = 0
+        total = 0
+        val_f1 = MultilabelF1Score(num_labels=NUM_CLASSES).to(DEVICE)
+        with torch.no_grad():
+            for inputs, labels in val_dataloader:
+                inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float()
+                outputs = model(inputs)
+                running_val_loss += loss_fn(outputs, labels).item()
+
+                # Convert outputs to binary predictions (don't overwrite outputs)
+                preds = outputs > 0.
+                val_f1.update(preds, labels)
+                correct += (preds == labels.bool()).sum().item()
+                total += labels.numel()
+
+        val_loss = running_val_loss / len(val_dataloader) if len(val_dataloader) > 0 else 0.0
+        val_acc = correct / total
+        val_f1 = val_f1.compute().item()
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
         train_accs.append(train_acc)
         val_accs.append(val_acc)
+        train_f1s.append(train_f1)
+        val_f1s.append(val_f1)
+
         scheduler.step(val_loss)
 
+
+        early_stopping(val_loss, model)
+        if early_stopping.early_stop:
+            print("Early stopping")
+            break
+
         print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
-        print(f"Val Loss:   {val_loss:.4f}, Val Acc:   {val_acc:.4f}\n")
+        print(f"Val   Loss: {val_loss:.4f}, Val   Acc: {val_acc:.4f}\n")
     print("done")
 
     plt.figure(figsize=(10, 5))
@@ -270,16 +327,29 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
     plt.savefig("accuracy_graph.png")
     # plt.show()
 
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_f1s, label='Train F1')
+    plt.plot(val_f1s, label='Val F1')
+    plt.title('F1 over Epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('F1')
+    plt.legend()
+    plt.savefig("f1_graph.png")
+    # plt.show()
+
+    early_stopping.load_best_model(model)
     test_loss, test_acc, f1_score = TestModel(model, loss_fn, test_dataloader)
     print(f'test loss = {test_loss:.4f}')
     print(f'test acc = {test_acc:.4f}')
-    print(f'f1 score = {f1_score:.4f}')
+    print(f'test f1 score = {f1_score:.4f}')
 
 
 if __name__ == '__main__':
     assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
-    dataset_train = CustomImageDataset(df=TRAIN_LABELS, img_dir=TRAIN_DATA, transform=TRANSFORMS)
-    dataset_val = CustomImageDataset(df=VAL_LABELS, img_dir=VAL_DATA, transform=TRANSFORMS)
-    dataset_test = CustomImageDataset(df=TEST_LABELS, img_dir=TEST_DATA, transform=TRANSFORMS)
+
+
+    dataset_train = CustomImageDataset(df=TRAIN_LABELS, img_dir=TRAIN_DATA, transform=TRAIN_TRANSFORMS)
+    dataset_val = CustomImageDataset(df=VAL_LABELS, img_dir=VAL_DATA, transform=TEST_TRANSFORMS)
+    dataset_test = CustomImageDataset(df=TEST_LABELS, img_dir=TEST_DATA, transform=TEST_TRANSFORMS)
     model = ResNet(ResidualBlock, [3, 4, 6, 3]).to(DEVICE)
     UseModel(model, dataset_train, dataset_val, dataset_test)

@@ -27,20 +27,25 @@ TEST_LABELS = pd.read_csv(f'{TEST_DIR}/RFMiD_Testing_Labels.csv')
 TEST_LABELS = TEST_LABELS[['ID', 'Disease_Risk']]
 TEST_DATA = f'{TEST_DIR}/Test'
 
-LEARNING_RATE = 1e-5
-EPOCHS = 100
-TRAINING_BATCH_SIZE = 64
-TEST_BATCH_SIZE = 64
-THRESHOLD = 0.5
-TRANSFORMS = v2.Compose([
+LEARNING_RATE = 1e-4
+EPOCHS = 200
+TRAINING_BATCH_SIZE = 32
+TEST_BATCH_SIZE = 32
+TRAIN_TRANSFORMS = v2.Compose([
     v2.ToImage(),
     v2.Resize((224, 224)),
     v2.RandomHorizontalFlip(0.5),
     v2.RandomRotation(degrees=15),
     v2.ConvertImageDtype(torch.float),
     v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    # v2.ToTensor(),
 ])
+TEST_TRANSFORMS = v2.Compose([
+    v2.ToImage(),
+    v2.Resize((224, 224)),
+    v2.ConvertImageDtype(torch.float),
+    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
 
@@ -92,18 +97,19 @@ class ResidualBlock(nn.Module):
 class ResNet(nn.Module):
     def __init__(self, block, num_blocks):
         super(ResNet, self).__init__()
-        self.in_channels = 32
+        self.in_channels = 64
 
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1)
+        self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
-        self.layer1 = self._make_layer(block, 32, num_blocks[0], stride=1)
-        self.layer2 = self._make_layer(block, 64, num_blocks[1], stride=2)
-        self.layer3 = self._make_layer(block, 128, num_blocks[2], stride=2)
-        self.layer4 = self._make_layer(block, 256, num_blocks[3], stride=2)
+        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
+        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
         self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.dropout = nn.Dropout(0.5)
         self.flatten = nn.Flatten()
-        self.linear = nn.Linear(256, 1)
+        self.linear = nn.Linear(512, 1)
 
     def _make_layer(self, block, out_channels, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)
@@ -120,6 +126,7 @@ class ResNet(nn.Module):
         out = self.layer3(out)
         out = self.layer4(out)
         out = self.avg_pool(out)
+        out = self.dropout(out)
         out = self.flatten(out)
         out = self.linear(out)
         return out
@@ -156,8 +163,8 @@ def PrepData(dataset_train, dataset_val, dataset_test):
     positives = dataset_train.df[label_cols].sum(axis=0).astype(float)
     total = len(dataset_train.df)
     negatives = total - positives
-    pos_weight_vals = (negatives / (positives + 1e-5)).values
-    pos_weights = torch.tensor(pos_weight_vals, dtype=torch.float32).sqrt()
+    pos_weight_vals = (negatives / positives).values
+    pos_weights = torch.tensor(pos_weight_vals, dtype=torch.float32)
     # pos_weights = torch.clamp(pos_weights, max=10.0)
 
     # print(dataset.__getitem__(3))
@@ -174,10 +181,12 @@ def PrepData(dataset_train, dataset_val, dataset_test):
 
 def train_one_epoch(dataloader, model, loss_fn, optimiser):
     loss_list = []
+    correct_list = []
     correct = 0
     total = 0
+    f1 = BinaryF1Score().to(DEVICE)
 
-    for i, data in enumerate(dataloader):
+    for batch, data in enumerate(dataloader):
         inputs, targets = data
         inputs, targets = inputs.to(DEVICE), targets.to(DEVICE).float().unsqueeze(1)
         optimiser.zero_grad()
@@ -186,25 +195,25 @@ def train_one_epoch(dataloader, model, loss_fn, optimiser):
         loss.backward()
         optimiser.step()
         loss_list.append(loss.item())
-        # outputs = torch.sigmoid(outputs) > THRESHOLD
-        # print(outputs)
-        # correct += (outputs == targets.bool()).sum().item()
-        # total += targets.numel()
+        outputs = outputs > 0.
+        f1.update(outputs, targets)
 
-        print(f"  Batch {i + 1}/{len(dataloader)} - Loss: {loss.item():.4f}")
+        correct += (outputs == targets.bool()).sum().item()
+        total += targets.numel()
 
+        print(f"  Batch {batch + 1}/{len(dataloader)} - Loss: {loss.item():.4f} - Acc: {(correct/total):.4f}", end='\r')
 
     avg_loss = np.mean(loss_list)
-    # accuracy = correct / total if total > 0 else 0.0
-    # return avg_loss, accuracy
-    return avg_loss
+    avg_accuracy = correct / total
+    f1 = f1.compute().item()
+    return avg_loss, avg_accuracy, f1
 
 def TestModel(model, loss_fn, dataloader):
     model.eval()
     test_loss = 0
     correct = 0
     total = 0
-    metric = BinaryF1Score(threshold=0.5).to(DEVICE)
+    metric = BinaryF1Score().to(DEVICE)
 
     all_preds = []
     all_targets = []
@@ -212,13 +221,13 @@ def TestModel(model, loss_fn, dataloader):
     with torch.no_grad():
         for inputs, labels in dataloader:
             inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)
-            pred = model(inputs)
-            test_loss += loss_fn(pred, labels).item()
-            preds = torch.sigmoid(pred) > THRESHOLD
-            correct += (preds == labels.bool()).sum().item()
+            outputs = model(inputs)
+            test_loss += loss_fn(outputs, labels).item()
+            outputs = outputs > 0.
+            correct += (outputs == labels.bool()).sum().item()
             total += labels.numel()
-            metric.update(pred, labels)
-            all_preds.append(preds.cpu().numpy())
+            metric.update(outputs, labels)
+            all_preds.append(outputs.cpu().numpy())
             all_targets.append(labels.cpu().numpy())
     avg_loss = test_loss / len(dataloader)
     accuracy = correct / total
@@ -232,13 +241,12 @@ def TestModel(model, loss_fn, dataloader):
 
 
 def UseModel(model, dataset_train, dataset_val, dataset_test):
-    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=3)
-    early_stopping = EarlyStopping(patience=10, delta=0.01)
+    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-3)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=10)
+    early_stopping = EarlyStopping(patience=100, delta=0.0001)
 
     train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData(dataset_train, dataset_val, dataset_test)
-    loss_fn = nn.BCEWithLogitsLoss()
-    # loss_fn = CrossEntropyLoss().to(DEVICE)
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
 
     patience = 5
     counter = 0
@@ -246,40 +254,49 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
 
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
+    train_f1s, val_f1s = [], []
 
     for epoch in range(EPOCHS):
         print(f"Epoch {epoch + 1}/{EPOCHS}")
         model.train(True)
-        # train_loss, train_acc = train_one_epoch(train_dataloader, model, loss_fn, optimiser)
-        train_loss = train_one_epoch(train_dataloader, model, loss_fn, optimiser)
+        train_loss, train_acc, train_f1 = train_one_epoch(train_dataloader, model, loss_fn, optimiser)
+        # train_loss = train_one_epoch(train_dataloader, model, loss_fn, optimiser)
         model.eval()
         running_val_loss = 0.0
         correct = 0
         total = 0
+        val_f1 = BinaryF1Score().to(DEVICE)
         with torch.no_grad():
             for inputs, labels in val_dataloader:
                 inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)
                 outputs = model(inputs)
                 running_val_loss += loss_fn(outputs, labels).item()
-                outputs = torch.sigmoid(outputs) > THRESHOLD
+
+                outputs = outputs > 0.
+                val_f1.update(outputs, labels)
                 correct += (outputs == labels.bool()).sum().item()
                 total += labels.numel()
 
         val_loss = running_val_loss / len(val_dataloader) if len(val_dataloader) > 0 else 0.0
-        val_acc = correct / total if total > 0 else 0.0
+        val_acc = correct / total
+        val_f1 = val_f1.compute().item()
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
-        # train_accs.append(train_acc)
+        train_accs.append(train_acc)
         val_accs.append(val_acc)
-        # scheduler.step(val_loss)
+        train_f1s.append(train_f1)
+        val_f1s.append(val_f1)
+
+        scheduler.step(val_loss)
+
 
         early_stopping(val_loss, model)
         if early_stopping.early_stop:
             print("Early stopping")
             break
 
-        # print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
+        print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
         print(f"Val   Loss: {val_loss:.4f}, Val   Acc: {val_acc:.4f}\n")
     print("done")
 
@@ -296,12 +313,22 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
     # --- Plot Accuracy ---
     plt.figure(figsize=(10, 5))
     plt.plot(train_accs, label='Train Accuracy')
-    plt.plot(val_accs, label='Test Accuracy')
+    plt.plot(val_accs, label='Val Accuracy')
     plt.title('Accuracy over Epochs')
     plt.xlabel('Epoch')
     plt.ylabel('Accuracy')
     plt.legend()
     plt.savefig("accuracy_graph.png")
+    # plt.show()
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_f1s, label='Train F1')
+    plt.plot(val_f1s, label='Val F1')
+    plt.title('F1 over Epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('F1')
+    plt.legend()
+    plt.savefig("f1_graph.png")
     # plt.show()
 
     early_stopping.load_best_model(model)
@@ -313,8 +340,8 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
 
 if __name__ == '__main__':
     assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
-    dataset_train = CustomImageDataset(df=TRAIN_LABELS, img_dir=TRAIN_DATA, transform=TRANSFORMS)
-    dataset_val = CustomImageDataset(df=VAL_LABELS, img_dir=VAL_DATA, transform=TRANSFORMS)
-    dataset_test = CustomImageDataset(df=TEST_LABELS, img_dir=TEST_DATA, transform=TRANSFORMS)
-    model = ResNet(ResidualBlock, [2, 2, 2, 2]).to(DEVICE)
+    dataset_train = CustomImageDataset(df=TRAIN_LABELS, img_dir=TRAIN_DATA, transform=TRAIN_TRANSFORMS)
+    dataset_val = CustomImageDataset(df=VAL_LABELS, img_dir=VAL_DATA, transform=TEST_TRANSFORMS)
+    dataset_test = CustomImageDataset(df=TEST_LABELS, img_dir=TEST_DATA, transform=TEST_TRANSFORMS)
+    model = ResNet(ResidualBlock, [3, 4, 6, 3]).to(DEVICE)
     UseModel(model, dataset_train, dataset_val, dataset_test)
