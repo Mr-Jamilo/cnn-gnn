@@ -253,6 +253,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
     train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData(dataset_train, dataset_val, dataset_test)
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
 
+    actual_epochs = 0
     patience = 5
     counter = 0
     best_val_loss = np.inf
@@ -296,8 +297,8 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
 
         scheduler.step(val_loss)
 
-
         early_stopping(val_loss, model)
+        actual_epochs += 1
         if early_stopping.early_stop:
             print("Early stopping")
             break
@@ -343,10 +344,44 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
     print(f'test acc = {test_acc:.4f}')
     print(f'test f1 score = {f1_score:.4f}')
 
+    #Logging
+    summary_path = 'training_summary.txt'
+    header = "classes\tlearning_rate\tweight_decay\tweight_parameter\tepochs\tearly_stopping\ttrain_transforms\ttest_transforms\tf1_score\n"
+
+    label_cols = [c for c in dataset_train.df.columns if c != 'ID']
+    classes_str = ",".join(label_cols)
+
+    lr = LEARNING_RATE
+    wd = optimiser.param_groups[0].get('weight_decay', 0)
+
+    weight_param_used = True if pos_weights is not None else False
+    early_stopping_used = True if early_stopping.early_stop else False
+
+    train_transforms_str = str(TRAIN_TRANSFORMS).replace("\n", " ").replace("\t", " ")
+    test_transforms_str = str(TEST_TRANSFORMS).replace("\n", " ").replace("\t", " ")
+
+    f1_str = f"{f1_score:.4f}"
+
+    line = (
+        f"{classes_str}\t"
+        f"{lr}\t"
+        f"{wd}\t"
+        f"{str(weight_param_used)}\t"
+        f"{actual_epochs}\t"
+        f"{str(early_stopping_used)}\t"
+        f"{train_transforms_str}\t"
+        f"{test_transforms_str}\t"
+        f"{f1_str}\n"
+    )
+
+    write_header = not os.path.exists(summary_path) or os.path.getsize(summary_path) == 0
+    with open(summary_path, "a", encoding="utf-8") as f:
+        if write_header:
+            f.write(header)
+        f.write(line)
 
 if __name__ == '__main__':
     assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
-
 
     dataset_train = CustomImageDataset(df=TRAIN_LABELS, img_dir=TRAIN_DATA, transform=TRAIN_TRANSFORMS)
     dataset_val = CustomImageDataset(df=VAL_LABELS, img_dir=VAL_DATA, transform=TEST_TRANSFORMS)
