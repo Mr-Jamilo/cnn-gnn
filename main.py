@@ -1,3 +1,6 @@
+#TODO look into using bash scripts (https://github.com/Delphboy/SuperCap/tree/main)
+#test
+
 import os
 import pandas as pd
 import torch
