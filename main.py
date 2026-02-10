@@ -15,13 +15,11 @@ from sklearn.metrics import classification_report
 TRAIN_DIR = 'dataset/Training_Set/Training_Set'
 TRAIN_LABELS = pd.read_csv(f'{TRAIN_DIR}/RFMiD_Training_Labels.csv')
 TRAIN_LABELS = TRAIN_LABELS[['ID', 'DR', 'MH', 'TSLN', 'ODC']]
-# TRAIN_LABELS.drop(columns='Disease_Risk', inplace=True)
 TRAIN_DATA = f'{TRAIN_DIR}/Training'
 
 VAL_DIR = 'dataset/Evaluation_Set/Evaluation_Set'
 VAL_LABELS = pd.read_csv(f'{VAL_DIR}/RFMiD_Validation_Labels.csv')
 VAL_LABELS = VAL_LABELS[['ID', 'DR', 'MH', 'TSLN', 'ODC']]
-# VAL_LABELS.drop(columns='Disease_Risk', inplace=True)
 VAL_DATA = f'{VAL_DIR}/Validation'
 
 TEST_DIR = 'dataset/Test_Set/Test_Set'
