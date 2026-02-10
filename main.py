@@ -25,12 +25,11 @@ VAL_DATA = f'{VAL_DIR}/Validation'
 TEST_DIR = 'dataset/Test_Set/Test_Set'
 TEST_LABELS = pd.read_csv(f'{TEST_DIR}/RFMiD_Testing_Labels.csv')
 TEST_LABELS = TEST_LABELS[['ID', 'DR', 'MH', 'TSLN', 'ODC']]
-# TEST_LABELS.drop(columns='Disease_Risk', inplace=True)
 TEST_DATA = f'{TEST_DIR}/Test'
 
 NUM_CLASSES = 4
-LEARNING_RATE = 1e-4
-EPOCHS = 100
+LEARNING_RATE = 5e-4
+EPOCHS = 10
 TRAINING_BATCH_SIZE = 32
 TEST_BATCH_SIZE = 32
 TRAIN_TRANSFORMS = v2.Compose([
@@ -244,7 +243,7 @@ def TestModel(model, loss_fn, dataloader):
 
 
 def UseModel(model, dataset_train, dataset_val, dataset_test):
-    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-3)
+    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=10)
     early_stopping = EarlyStopping(patience=100, delta=0.0001)
 
