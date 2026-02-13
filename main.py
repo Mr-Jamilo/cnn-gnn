@@ -12,6 +12,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchmetrics.classification import MultilabelF1Score
 from sklearn.metrics import classification_report
 from datetime import datetime
+from torchinfo import summary
 
 TRAIN_DIR = 'dataset/Training_Set/Training_Set'
 TRAIN_LABELS = pd.read_csv(f'{TRAIN_DIR}/RFMiD_Training_Labels.csv')
@@ -27,10 +28,10 @@ TEST_DIR = 'dataset/Test_Set/Test_Set'
 TEST_LABELS = pd.read_csv(f'{TEST_DIR}/RFMiD_Testing_Labels.csv')
 TEST_LABELS = TEST_LABELS[['ID', 'DR', 'MH', 'TSLN', 'ODC']]
 TEST_DATA = f'{TEST_DIR}/Test'
-
+RES_BLOCKS = [2, 2, 2, 2]
 NUM_CLASSES = 4
-LEARNING_RATE = 5e-4
-EPOCHS = 100
+LEARNING_RATE = 1e-4
+EPOCHS = 150
 TRAINING_BATCH_SIZE = 32
 TEST_BATCH_SIZE = 32
 train_transform_list = [v2.ToImage(),v2.Resize((224, 224)), v2.RandomHorizontalFlip(0.5), v2.RandomRotation(degrees=15), v2.ConvertImageDtype(torch.float), v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
@@ -158,6 +159,7 @@ def PrepData(dataset_train, dataset_val, dataset_test):
     negatives = total - positives
     pos_weight_vals = (negatives / positives).values
     pos_weights = torch.tensor(pos_weight_vals, dtype=torch.float32)
+    print("Pos weights:", pos_weights)
     # pos_weights = torch.clamp(pos_weights, max=200.0)
 
     # print(dataset.__getitem__(3))
@@ -234,9 +236,9 @@ def TestModel(model, loss_fn, dataloader):
 
 
 def UseModel(model, dataset_train, dataset_val, dataset_test):
-    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-2)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=10)
-    early_stopping = EarlyStopping(patience=100, delta=0.0001)
+    early_stopping = EarlyStopping(patience=25, delta=0.0001)
 
     train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData(dataset_train, dataset_val, dataset_test)
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
@@ -266,7 +268,6 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
                 outputs = model(inputs)
                 running_val_loss += loss_fn(outputs, labels).item()
 
-                # Convert outputs to binary predictions (don't overwrite outputs)
                 preds = outputs > 0.
                 val_f1.update(preds, labels)
                 correct += (preds == labels.bool()).sum().item()
@@ -334,7 +335,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
 
     #Logging
     summary_path = 'main.txt'
-    header = "date;time;classes;learning_rate;weight_decay;weight_parameter;epochs;early_stopping;train_transforms;test_transforms;f1_score\n"
+    header = "date;time;res_blocks;classes;learning_rate;weight_decay;weight_parameter;epochs;early_stopping;train_transforms;test_transforms;f1_score\n"
 
     now = datetime.now()
     date_str = now.strftime("%d-%m-%Y")
@@ -352,6 +353,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
     line = (
         f"{date_str};"
         f"{time_str};"
+        f"{RES_BLOCKS};"
         f"{len(label_cols)}({classes_str});"
         f"{lr};"
         f"{wd};"
@@ -375,5 +377,6 @@ if __name__ == '__main__':
     dataset_train = CustomImageDataset(df=TRAIN_LABELS, img_dir=TRAIN_DATA, transform=TRAIN_TRANSFORMS)
     dataset_val = CustomImageDataset(df=VAL_LABELS, img_dir=VAL_DATA, transform=TEST_TRANSFORMS)
     dataset_test = CustomImageDataset(df=TEST_LABELS, img_dir=TEST_DATA, transform=TEST_TRANSFORMS)
-    model = ResNet(ResidualBlock, [3, 4, 6, 3]).to(DEVICE)
+    model = ResNet(ResidualBlock, RES_BLOCKS).to(DEVICE)
+    print(summary(model, input_size=(TRAINING_BATCH_SIZE, 3, 224, 224)))
     UseModel(model, dataset_train, dataset_val, dataset_test)
