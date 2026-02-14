@@ -31,6 +31,7 @@ TEST_DATA = f'{TEST_DIR}/Test'
 RES_BLOCKS = [2, 2, 2, 2]
 NUM_CLASSES = 4
 LEARNING_RATE = 1e-4
+USE_WEIGHT_BIAS = False
 EPOCHS = 150
 TRAINING_BATCH_SIZE = 32
 TEST_BATCH_SIZE = 32
@@ -241,7 +242,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
     early_stopping = EarlyStopping(patience=25, delta=0.0001)
 
     train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData(dataset_train, dataset_val, dataset_test)
-    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE)) if USE_WEIGHT_BIAS else nn.BCEWithLogitsLoss()
 
     actual_epochs = 0
     patience = 5
@@ -347,7 +348,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
     lr = LEARNING_RATE
     wd = optimiser.param_groups[0].get('weight_decay', 0)
 
-    weight_param_used = True if pos_weights is not None else False
+    weight_param_used = True if USE_WEIGHT_BIAS else False
     early_stopping_used = True if early_stopping.early_stop else False
 
     line = (
