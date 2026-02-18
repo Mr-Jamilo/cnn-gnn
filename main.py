@@ -9,7 +9,7 @@ from torch import nn
 from PIL import Image
 from torchvision.transforms import v2
 from torch.utils.data import Dataset, DataLoader
-from torchmetrics.classification import MultilabelF1Score
+from torchmetrics.classification import MultilabelF1Score, MultilabelPrecision, MultilabelRecall
 from sklearn.metrics import classification_report
 from datetime import datetime
 from torchinfo import summary
@@ -30,9 +30,10 @@ TEST_LABELS = TEST_LABELS[['ID', 'DR', 'MH', 'TSLN', 'ODC']]
 TEST_DATA = f'{TEST_DIR}/Test'
 RES_BLOCKS = [2, 2, 2, 2]
 NUM_CLASSES = 4
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 4e-5
 USE_WEIGHT_BIAS = False
 EPOCHS = 150
+THRESHOLD = 0.8
 TRAINING_BATCH_SIZE = 32
 TEST_BATCH_SIZE = 32
 train_transform_list = [v2.ToImage(),v2.Resize((224, 224)), v2.RandomHorizontalFlip(0.5), v2.RandomRotation(degrees=15), v2.ConvertImageDtype(torch.float), v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
@@ -191,7 +192,7 @@ def train_one_epoch(dataloader, model, loss_fn, optimiser):
         loss.backward()
         optimiser.step()
         loss_list.append(loss.item())
-        outputs = outputs > 0.
+        outputs = torch.sigmoid(outputs) > THRESHOLD
         f1.update(outputs, targets)
 
         correct += (outputs == targets.bool()).sum().item()
@@ -210,6 +211,8 @@ def TestModel(model, loss_fn, dataloader):
     correct = 0
     total = 0
     metric = MultilabelF1Score(num_labels=NUM_CLASSES).to(DEVICE)
+    precision_metric = MultilabelPrecision(num_labels=NUM_CLASSES).to(DEVICE)
+    recall_metric = MultilabelRecall(num_labels=NUM_CLASSES).to(DEVICE)
 
     all_preds = []
     all_targets = []
@@ -219,25 +222,29 @@ def TestModel(model, loss_fn, dataloader):
             inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float()
             outputs = model(inputs)
             test_loss += loss_fn(outputs, labels).item()
-            outputs = outputs > 0.
+            outputs = torch.sigmoid(outputs) > THRESHOLD
             correct += (outputs == labels.bool()).sum().item()
             total += labels.numel()
             metric.update(outputs, labels)
+            precision_metric.update(outputs, labels)
+            recall_metric.update(outputs, labels)
             all_preds.append(outputs.cpu().numpy())
             all_targets.append(labels.cpu().numpy())
     avg_loss = test_loss / len(dataloader)
     accuracy = correct / total
     f1_score = metric.compute().item()
+    precision = precision_metric.compute().item()
+    recall = recall_metric.compute().item()
 
     val_preds_np = np.vstack(all_preds)
     val_targets_np = np.vstack(all_targets)
     print(classification_report(val_targets_np, val_preds_np, zero_division=0))
 
-    return avg_loss, accuracy, f1_score
+    return avg_loss, accuracy, f1_score, precision, recall
 
 
 def UseModel(model, dataset_train, dataset_val, dataset_test):
-    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-2)
+    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=10)
     early_stopping = EarlyStopping(patience=25, delta=0.0001)
 
@@ -269,7 +276,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
                 outputs = model(inputs)
                 running_val_loss += loss_fn(outputs, labels).item()
 
-                preds = outputs > 0.
+                preds = torch.sigmoid(outputs) > THRESHOLD
                 val_f1.update(preds, labels)
                 correct += (preds == labels.bool()).sum().item()
                 total += labels.numel()
@@ -329,14 +336,14 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
     # plt.show()
 
     early_stopping.load_best_model(model)
-    test_loss, test_acc, f1_score = TestModel(model, loss_fn, test_dataloader)
+    test_loss, test_acc, f1_score, precision, recall = TestModel(model, loss_fn, test_dataloader)
     print(f'test loss = {test_loss:.4f}')
     print(f'test acc = {test_acc:.4f}')
     print(f'test f1 score = {f1_score:.4f}')
 
     #Logging
     summary_path = 'main.txt'
-    header = "date;time;res_blocks;classes;learning_rate;weight_decay;weight_parameter;epochs;early_stopping;train_transforms;test_transforms;f1_score\n"
+    header = "date;time;res_blocks;classes;learning_rate;weight_decay;weight_parameter;Threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n"
 
     now = datetime.now()
     date_str = now.strftime("%d-%m-%Y")
@@ -359,10 +366,13 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
         f"{lr};"
         f"{wd};"
         f"{str(weight_param_used)};"
+        f"{THRESHOLD};"
         f"{actual_epochs};"
         f"{str(early_stopping_used)};"
         f"{str(train_transform_list)};"
         f"{str(test_transform_list)};"
+        f"{precision:.4f};"
+        f"{recall:.4f};"
         f"{f1_score:.4f}\n"
     )
 
