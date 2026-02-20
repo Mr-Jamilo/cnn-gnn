@@ -9,8 +9,10 @@ from torch import nn
 from PIL import Image
 from torchvision.transforms import v2
 from torch.utils.data import Dataset, DataLoader
-from torchmetrics.classification import BinaryF1Score
+from torchmetrics.classification import BinaryF1Score, BinaryPrecision, BinaryRecall
 from sklearn.metrics import classification_report
+from datetime import datetime
+from torchinfo import summary
 
 TRAIN_DIR = 'dataset/Training_Set/Training_Set'
 TRAIN_LABELS = pd.read_csv(f'{TRAIN_DIR}/RFMiD_Training_Labels.csv')
@@ -27,24 +29,18 @@ TEST_LABELS = pd.read_csv(f'{TEST_DIR}/RFMiD_Testing_Labels.csv')
 TEST_LABELS = TEST_LABELS[['ID', 'Disease_Risk']]
 TEST_DATA = f'{TEST_DIR}/Test'
 
-LEARNING_RATE = 1e-4
-EPOCHS = 200
+RES_BLOCKS = [2, 2, 2, 2]
+LEARNING_RATE = 1e-5
+USE_WEIGHT_BIAS = True
+WEIGHT_DECAY = 1e-3
+EPOCHS = 150
+THRESHOLD = 0.8
 TRAINING_BATCH_SIZE = 32
 TEST_BATCH_SIZE = 32
-TRAIN_TRANSFORMS = v2.Compose([
-    v2.ToImage(),
-    v2.Resize((224, 224)),
-    v2.RandomHorizontalFlip(0.5),
-    v2.RandomRotation(degrees=15),
-    v2.ConvertImageDtype(torch.float),
-    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
-TEST_TRANSFORMS = v2.Compose([
-    v2.ToImage(),
-    v2.Resize((224, 224)),
-    v2.ConvertImageDtype(torch.float),
-    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
+train_transform_list = [v2.ToImage(),v2.Resize((224, 224)), v2.RandomHorizontalFlip(0.5), v2.RandomRotation(degrees=15), v2.ConvertImageDtype(torch.float), v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
+TRAIN_TRANSFORMS = v2.Compose(train_transform_list)
+test_transform_list = [v2.ToImage(), v2.Resize((224, 224)), v2.ConvertImageDtype(torch.float), v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
+TEST_TRANSFORMS = v2.Compose(test_transform_list)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
@@ -214,6 +210,8 @@ def TestModel(model, loss_fn, dataloader):
     correct = 0
     total = 0
     metric = BinaryF1Score().to(DEVICE)
+    precision_metric = BinaryPrecision().to(DEVICE)
+    recall_metric = BinaryRecall().to(DEVICE)
 
     all_preds = []
     all_targets = []
@@ -227,31 +225,33 @@ def TestModel(model, loss_fn, dataloader):
             correct += (outputs == labels.bool()).sum().item()
             total += labels.numel()
             metric.update(outputs, labels)
+            precision_metric.update(outputs, labels)
+            recall_metric.update(outputs, labels)
             all_preds.append(outputs.cpu().numpy())
             all_targets.append(labels.cpu().numpy())
     avg_loss = test_loss / len(dataloader)
     accuracy = correct / total
     f1_score = metric.compute().item()
+    precision = precision_metric.compute().item()
+    recall = recall_metric.compute().item()
 
     val_preds_np = np.vstack(all_preds)
     val_targets_np = np.vstack(all_targets)
     print(classification_report(val_targets_np, val_preds_np, zero_division=0))
 
-    return avg_loss, accuracy, f1_score
+    return avg_loss, accuracy, f1_score, precision, recall
 
 
 def UseModel(model, dataset_train, dataset_val, dataset_test):
-    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-3)
+    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=10)
-    early_stopping = EarlyStopping(patience=100, delta=0.0001)
+    early_stopping = EarlyStopping(patience=20, delta=0.00001)
 
     train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData(dataset_train, dataset_val, dataset_test)
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
+    # loss_fn = nn.CrossEntropyLoss()
 
-    patience = 5
-    counter = 0
-    best_val_loss = np.inf
-
+    actual_epochs = 0
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
     train_f1s, val_f1s = [], []
@@ -290,8 +290,8 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
 
         scheduler.step(val_loss)
 
-
         early_stopping(val_loss, model)
+        actual_epochs += 1
         if early_stopping.early_stop:
             print("Early stopping")
             break
@@ -332,10 +332,47 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
     # plt.show()
 
     early_stopping.load_best_model(model)
-    test_loss, test_acc, f1_score = TestModel(model, loss_fn, test_dataloader)
+    test_loss, test_acc, f1_score, precision, recall = TestModel(model, loss_fn, test_dataloader)
     print(f'test loss = {test_loss:.4f}')
     print(f'test acc = {test_acc:.4f}')
     print(f'test f1 score = {f1_score:.4f}')
+
+    # Logging
+    summary_path = 'binary.txt'
+    header = "date;time;res_blocks;learning_rate;weight_decay;weight_parameter;Threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n"
+
+    now = datetime.now()
+    date_str = now.strftime("%d-%m-%Y")
+    time_str = now.strftime("%H:%M:%S")
+
+    label_cols = [c for c in dataset_train.df.columns if c != 'ID']
+    classes_str = ",".join(label_cols)
+
+    weight_param_used = True if USE_WEIGHT_BIAS else False
+    early_stopping_used = True if early_stopping.early_stop else False
+
+    line = (
+        f"{date_str};"
+        f"{time_str};"
+        f"{RES_BLOCKS};"
+        f"{LEARNING_RATE};"
+        f"{WEIGHT_DECAY};"
+        f"{str(weight_param_used)};"
+        f"{THRESHOLD};"
+        f"{actual_epochs};"
+        f"{str(early_stopping_used)};"
+        f"{str(train_transform_list)};"
+        f"{str(test_transform_list)};"
+        f"{precision:.4f};"
+        f"{recall:.4f};"
+        f"{f1_score:.4f}\n"
+    )
+
+    write_header = not os.path.exists(summary_path) or os.path.getsize(summary_path) == 0
+    with open(summary_path, "a", encoding="utf-8") as f:
+        if write_header:
+            f.write(header)
+        f.write(line)
 
 
 if __name__ == '__main__':
@@ -343,5 +380,6 @@ if __name__ == '__main__':
     dataset_train = CustomImageDataset(df=TRAIN_LABELS, img_dir=TRAIN_DATA, transform=TRAIN_TRANSFORMS)
     dataset_val = CustomImageDataset(df=VAL_LABELS, img_dir=VAL_DATA, transform=TEST_TRANSFORMS)
     dataset_test = CustomImageDataset(df=TEST_LABELS, img_dir=TEST_DATA, transform=TEST_TRANSFORMS)
-    model = ResNet(ResidualBlock, [3, 4, 6, 3]).to(DEVICE)
+    model = ResNet(ResidualBlock, RES_BLOCKS).to(DEVICE)
+    print(summary(model, input_size=(TRAINING_BATCH_SIZE, 3, 224, 224)))
     UseModel(model, dataset_train, dataset_val, dataset_test)
