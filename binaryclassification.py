@@ -29,12 +29,12 @@ TEST_LABELS = pd.read_csv(f'{TEST_DIR}/RFMiD_Testing_Labels.csv')
 TEST_LABELS = TEST_LABELS[['ID', 'Disease_Risk']]
 TEST_DATA = f'{TEST_DIR}/Test'
 
-RES_BLOCKS = [2, 2, 2, 2]
+RES_BLOCKS = [3, 4, 6, 3]
 LEARNING_RATE = 1e-5
 USE_WEIGHT_BIAS = True
 WEIGHT_DECAY = 1e-3
 EPOCHS = 150
-THRESHOLD = 0.8
+THRESHOLD = 0.9
 TRAINING_BATCH_SIZE = 32
 TEST_BATCH_SIZE = 32
 train_transform_list = [v2.ToImage(),v2.Resize((224, 224)), v2.RandomHorizontalFlip(0.5), v2.RandomRotation(degrees=15), v2.ConvertImageDtype(torch.float), v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
@@ -177,7 +177,6 @@ def PrepData(dataset_train, dataset_val, dataset_test):
 
 def train_one_epoch(dataloader, model, loss_fn, optimiser):
     loss_list = []
-    correct_list = []
     correct = 0
     total = 0
     f1 = BinaryF1Score().to(DEVICE)
@@ -191,7 +190,7 @@ def train_one_epoch(dataloader, model, loss_fn, optimiser):
         loss.backward()
         optimiser.step()
         loss_list.append(loss.item())
-        outputs = outputs > 0.
+        outputs = torch.sigmoid(outputs) > THRESHOLD
         f1.update(outputs, targets)
 
         correct += (outputs == targets.bool()).sum().item()
@@ -221,7 +220,7 @@ def TestModel(model, loss_fn, dataloader):
             inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)
             outputs = model(inputs)
             test_loss += loss_fn(outputs, labels).item()
-            outputs = outputs > 0.
+            outputs = torch.sigmoid(outputs) > THRESHOLD
             correct += (outputs == labels.bool()).sum().item()
             total += labels.numel()
             metric.update(outputs, labels)
@@ -272,7 +271,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
                 outputs = model(inputs)
                 running_val_loss += loss_fn(outputs, labels).item()
 
-                outputs = outputs > 0.
+                outputs = torch.sigmoid(outputs) > THRESHOLD
                 val_f1.update(outputs, labels)
                 correct += (outputs == labels.bool()).sum().item()
                 total += labels.numel()
