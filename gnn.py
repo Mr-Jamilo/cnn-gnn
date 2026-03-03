@@ -89,21 +89,21 @@ class GrapherModule(nn.Module):
         )
         edge_mlp = nn.Sequential(
             nn.Linear(in_channels*2, hidden_channels),
-            nn.BatchNorm2d(hidden_channels),
+            nn.BatchNorm1d(hidden_channels),
             nn.GELU(),
         )
         self.gcn = pyg_nn.DynamicEdgeConv(nn=edge_mlp, k=k, aggr='max')
 
         self.fc2 = nn.Sequential(
             nn.Linear(hidden_channels, in_channels),
-            nn.BatchNorm2d(in_channels),
+            nn.BatchNorm1d(in_channels),
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
     def forward(self, x):
         B, N, C = x.shape
         shortcut = x
-        x = x.view(B*N, C)
+        x = x.reshape(B*N, C)
         x = self.fc1(x)
         batch_vector = torch.arange(B).repeat_interleave(N).to(x.device)
         x = self.gcn(x, batch_vector)
@@ -122,7 +122,7 @@ class FFNModule(nn.Module):
         )
         self.fc2 = nn.Sequential(
             nn.Linear(hidden_channels, in_channels),
-            nn.BatchNorm2d(in_channels),
+            nn.BatchNorm1d(in_channels),
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
@@ -150,7 +150,7 @@ class ViGBlock(nn.Module):
 class ViGNN(nn.Module):
     def __init__(self, in_features=3*16*16, out_feature=320, num_patches=196, num_ViGBlocks=16, num_edges=9, head_num=1):
         super().__init__()
-        self.patchifier = CreatePatches(in_channels=in_features, patch_size=16, embed_dim=out_feature)
+        self.patchifier = CreatePatches(in_channels=3, patch_size=16, embed_dim=out_feature)
         self.pose_embedding = nn.Parameter(torch.randn(1, num_patches, out_feature))
         self.blocks = nn.Sequential(*[ViGBlock(out_feature, num_edges, head_num) for _ in range(num_ViGBlocks)])
 
@@ -166,7 +166,7 @@ class Classifier(nn.Module):
         super().__init__()
         self.backbone = ViGNN(in_features, out_feature,num_patches, num_ViGBlocks,num_edges, head_num)
         self.predictor = nn.Sequential(
-            nn.Linear(out_feature*num_patches, hidden_layer),
+            nn.Linear(out_feature, hidden_layer),
             nn.BatchNorm1d(hidden_layer),
             nn.GELU(),
             nn.Linear(hidden_layer, n_classes)
