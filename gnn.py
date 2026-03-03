@@ -84,55 +84,50 @@ class GrapherModule(nn.Module):
     def __init__(self, in_channels, hidden_channels, k=K_NEIGHBOURS, dilation=1, drop_path=0.0):
         super(GrapherModule, self).__init__()
         self.fc1 = nn.Sequential(
-            nn.Linear(in_channels, in_channels),
-            nn.BatchNorm1d(in_channels),
+            nn.Conv2d(in_channels, in_channels, 1, stride=1, padding=0),
+            nn.BatchNorm2d(in_channels),
         )
         edge_mlp = nn.Sequential(
-            nn.Linear(in_channels*2, hidden_channels),
-            nn.BatchNorm1d(hidden_channels),
+            nn.Linear(in_channels, hidden_channels),
+            nn.BatchNorm2d(hidden_channels),
             nn.GELU(),
         )
         self.gcn = pyg_nn.DynamicEdgeConv(nn=edge_mlp, k=k, aggr='max')
 
         self.fc2 = nn.Sequential(
-            nn.Linear(hidden_channels, in_channels),
-            nn.BatchNorm1d(in_channels),
+            nn.Conv2d(hidden_channels, in_channels, 1, 1, 0),
+            nn.BatchNorm2d(in_channels),
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
     def forward(self, x):
-        B, N, C = x.shape
+        B, C, H, W = x.shape
+        x = x.reshape(B, C, -1, 1).contiguous()
         shortcut = x
-        x = x.reshape(B*N, C)
-        x = self.fc1(x)
-        batch_vector = torch.arange(B).repeat_interleave(N).to(x.device)
-        x = self.gcn(x, batch_vector)
+        x = self.fc1()
+        x = self.gcn(x)
         x = self.fc2(x)
-        x = x.view(B, N, C)
         x = self.drop_path(x) + shortcut
-        return x
+        return x.reshape(B, C, H, W)
 
 class FFNModule(nn.Module):
     def __init__(self, in_channels, hidden_channels, drop_path=0.0):
         super(FFNModule, self).__init__()
         self.fc1 = nn.Sequential(
-            nn.Linear(in_channels, hidden_channels),
-            nn.BatchNorm1d(hidden_channels),
+            nn.Conv2d(in_channels, hidden_channels, 1, 1, 0),
+            nn.BatchNorm2d(hidden_channels),
             nn.GELU()
         )
         self.fc2 = nn.Sequential(
-            nn.Linear(hidden_channels, in_channels),
-            nn.BatchNorm1d(in_channels),
+            nn.Conv2d(hidden_channels, in_channels, 1, 1, 0),
+            nn.BatchNorm2d(in_channels),
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
     def forward(self, x):
-        B, N, C = x.shape
         shortcut = x
-        x = x.view(B*N, C)
         x = self.fc1(x)
         x = self.fc2(x)
-        x = x.view(B, N, C)
         x = self.drop_path(x) + shortcut
         return x
 
