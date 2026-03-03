@@ -13,6 +13,8 @@ from torchmetrics.classification import BinaryF1Score, BinaryPrecision, BinaryRe
 from sklearn.metrics import classification_report
 from datetime import datetime
 from torchinfo import summary
+from torch_geometric import nn as pyg_nn
+from timm.models.layers import DropPath
 
 TRAIN_DIR = 'dataset/Training_Set/Training_Set'
 TRAIN_LABELS = pd.read_csv(f'{TRAIN_DIR}/RFMiD_Training_Labels.csv')
@@ -29,6 +31,7 @@ TEST_LABELS = pd.read_csv(f'{TEST_DIR}/RFMiD_Testing_Labels.csv')
 TEST_LABELS = TEST_LABELS[['ID', 'Disease_Risk']]
 TEST_DATA = f'{TEST_DIR}/Test'
 
+K_NEIGHBOURS = 9
 RES_BLOCKS = [3, 4, 6, 3]
 LEARNING_RATE = 1e-4
 USE_WEIGHT_BIAS = True
@@ -77,127 +80,176 @@ class CreatePatches(nn.Module):
         x = x.flatten(2).transpose(1, 2)
         return x
 
-class TwoLayerNN(nn.Module):
-    def __init__(self, in_features, hidden_features=None, out_features=None):
-        super().__init__()
-        out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
-
-        self.layer = nn.Sequential(
-            nn.Linear(in_features, hidden_features),
-            nn.BatchNorm1d(hidden_features),
-            nn.GELU(),
-            nn.Linear(hidden_features, out_features),
+class GrapherModule(nn.Module):
+    def __init__(self, in_channels, hidden_channels, k=K_NEIGHBOURS, dilation=1, drop_path=0.0):
+        super(GrapherModule, self).__init__()
+        self.fc1 = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0),
+            nn.BatchNorm2d(in_channels),
         )
+        edge_mlp = nn.Sequential(
+            nn.Linear(in_channels*2, hidden_channels),
+            nn.BatchNorm2d(hidden_channels),
+            nn.GELU(),
+        )
+        self.gcn = pyg_nn.DynamicEdgeConv(nn=edge_mlp, k=k, aggr='max')
 
-    def forward(self, x):
-        return self.layer(x) + x
-
-
-class Block(nn.Module):
-    def __init__(self, in_features, num_edges=9, head_num=1):
-        super().__init__()
-        self.k = num_edges
-        self.num_edges = num_edges
-        self.in_layer1 = TwoLayerNN(in_features)
-        self.out_layer1 = TwoLayerNN(in_features)
-        self.droppath1 = nn.Identity()  # DropPath(0)
-        self.in_layer2 = TwoLayerNN(in_features, in_features*4)
-        self.out_layer2 = TwoLayerNN(in_features, in_features*4)
-        self.droppath2 = nn.Identity()  # DropPath(0)
-        self.multi_head_fc = nn.Conv1d(
-            in_features*2, in_features, 1, 1, groups=head_num)
+        self.fc2 = nn.Sequential(
+            nn.Conv2d(hidden_channels, in_channels, 1, stride=1, padding=0),
+            nn.BatchNorm2d(in_channels),
+        )
+        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
     def forward(self, x):
         B, N, C = x.shape
-
-        sim = x @ x.transpose(-1, -2)
-        graph = sim.topk(self.k, dim=-1).indices
-
         shortcut = x
-        x = self.in_layer1(x.view(B * N, -1)).view(B, N, -1)
+        x = self.fc1(x)
+        x = self.graph_conv(x)
+        x = self.fc2(x)
+        x = self.drop_path(x) + shortcut
+        return x.reshape(B, N, C)
 
-        # aggregation
-        neibor_features = x[torch.arange(
-            B).unsqueeze(-1).expand(-1, N).unsqueeze(-1), graph]
-        x = torch.stack(
-            [x, (neibor_features - x.unsqueeze(-2)).amax(dim=-2)], dim=-1)
-
-        # update
-        # Multi-head
-        x = self.multi_head_fc(x.view(B * N, -1, 1)).view(B, N, -1)
-
-        x = self.droppath1(self.out_layer1(
-            nn.functional.gelu(x).view(B * N, -1)).view(B, N, -1))
-        x = x + shortcut
-
-        x = self.droppath2(self.out_layer2(nn.functional.gelu(self.in_layer2(
-            x.view(B * N, -1)))).view(B, N, -1)) + x
-
-        return x
-
-class GNN(nn.Module):
-    def __init__(self, in_features=3*16*16, out_feature=320, num_patches=196, num_ViGBlocks=16, num_edges=9, head_num=1):
-        super().__init__()
-
-        self.patchifier = CreatePatches()
-        # self.patch_embedding = TwoLayerNN(in_features)
-        self.patch_embedding = nn.Sequential(
-            nn.Linear(in_features, out_feature//2),
-            nn.BatchNorm1d(out_feature//2),
-            nn.GELU(),
-            nn.Linear(out_feature//2, out_feature//4),
-            nn.BatchNorm1d(out_feature//4),
-            nn.GELU(),
-            nn.Linear(out_feature//4, out_feature//8),
-            nn.BatchNorm1d(out_feature//8),
-            nn.GELU(),
-            nn.Linear(out_feature//8, out_feature//4),
-            nn.BatchNorm1d(out_feature//4),
-            nn.GELU(),
-            nn.Linear(out_feature//4, out_feature//2),
-            nn.BatchNorm1d(out_feature//2),
-            nn.GELU(),
-            nn.Linear(out_feature//2, out_feature),
-            nn.BatchNorm1d(out_feature)
+class FFNModule(nn.Module):
+    def __init__(self, in_channels, hidden_channels, drop_path=0.0):
+        super(FFNModule, self).__init__()
+        self.fc1 = nn.Sequential(
+            nn.Conv2d(in_channels=in_channels, out_channels=hidden_channels, kernel_size=1, stride=1, padding=0),
+            nn.BatchNorm2d(hidden_channels),
+            nn.GELU()
         )
-        self.pose_embedding = nn.Parameter(
-            torch.rand(num_patches, out_feature))
-
-        self.blocks = nn.Sequential(
-            *[Block(out_feature, num_edges, head_num)
-              for _ in range(num_ViGBlocks)])
+        self.fc2 = nn.Sequential(
+            nn.Conv2d(in_channels=hidden_channels, out_channels=in_channels, kernel_size=1, stride=1, padding=0),
+            nn.BatchNorm2d(in_channels),
+        )
+        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
     def forward(self, x):
-        x = self.patchifier(x)
-        B, N, C = x.shape
-        x = self.patch_embedding(x.reshape(B * N, -1)).reshape(B, N, -1)
-        x = x + self.pose_embedding
-
-        x = self.blocks(x)
-
+        shortcut = x
+        x = self.fc1(x)
+        x = self.fc2(x)
+        x = self.drop_path(x) + shortcut
         return x
 
-
-class Classifier(nn.Module):
-    def __init__(self, in_features=3*16*16, out_feature=320, num_patches=196, num_ViGBlocks=16, hidden_layer=1024, num_edges=9, head_num=1, n_classes=1):
-        super().__init__()
-        self.backbone = GNN(in_features, out_feature,
-                             num_patches, num_ViGBlocks,
-                             num_edges, head_num)
-
-        self.predictor = nn.Sequential(
-            nn.Linear(out_feature*num_patches, hidden_layer),
-            nn.BatchNorm1d(hidden_layer),
-            nn.GELU(),
-            nn.Linear(hidden_layer, n_classes)
-        )
+class ViGBlock(nn.Module):
+    def __init__(self, channels, k, dilation, drop_path=0.0):
+        super(ViGBlock, self).__init__()
+        self.grapher = GrapherModule(channels, channels*2, k, dilation, drop_path)
+        self.fnn = FFNModule(channels, channels*4, drop_path)
 
     def forward(self, x):
-        features = self.backbone(x)
-        B, N, C = features.shape
-        x = self.predictor(features.view(B, -1))
-        return features, x
+        x = self.grapher(x)
+        x = self.fnn(x)
+        return x
+
+# class TwoLayerNN(nn.Module):
+#     def __init__(self, in_features, hidden_features=None, out_features=None):
+#         super().__init__()
+#         out_features = out_features or in_features
+#         hidden_features = hidden_features or in_features
+#
+#         self.layer = nn.Sequential(
+#             nn.Linear(in_features, hidden_features),
+#             nn.BatchNorm1d(hidden_features),
+#             nn.GELU(),
+#             nn.Linear(hidden_features, out_features),
+#         )
+#
+#     def forward(self, x):
+#         return self.layer(x) + x
+#
+# class Block(nn.Module):
+#     def __init__(self, in_features, num_edges=9, head_num=1):
+#         super().__init__()
+#         self.k = num_edges
+#         self.num_edges = num_edges
+#         self.in_layer1 = TwoLayerNN(in_features)
+#         self.out_layer1 = TwoLayerNN(in_features)
+#         self.droppath1 = nn.Identity()  # DropPath(0)
+#         self.in_layer2 = TwoLayerNN(in_features, in_features*4)
+#         self.out_layer2 = TwoLayerNN(in_features, in_features*4)
+#         self.droppath2 = nn.Identity()  # DropPath(0)
+#         self.multi_head_fc = nn.Conv1d(in_features*2, in_features, 1, 1, groups=head_num)
+#
+#     def forward(self, x):
+#         B, N, C = x.shape
+#
+#         sim = x @ x.transpose(-1, -2)
+#         graph = sim.topk(self.k, dim=-1).indices
+#
+#         shortcut = x
+#         x = self.in_layer1(x.view(B * N, -1)).view(B, N, -1)
+#
+#         # aggregation
+#         neibor_features = x[torch.arange(B).unsqueeze(-1).expand(-1, N).unsqueeze(-1), graph]
+#         x = torch.stack([x, (neibor_features - x.unsqueeze(-2)).amax(dim=-2)], dim=-1)
+#
+#         # update
+#         # Multi-head
+#         x = self.multi_head_fc(x.view(B * N, -1, 1)).view(B, N, -1)
+#
+#         x = self.droppath1(self.out_layer1(nn.functional.gelu(x).view(B * N, -1)).view(B, N, -1))
+#         x = x + shortcut
+#
+#         x = self.droppath2(self.out_layer2(nn.functional.gelu(self.in_layer2(x.view(B * N, -1)))).view(B, N, -1)) + x
+#
+#         return x
+#
+# class GNN(nn.Module):
+#     def __init__(self, in_features=3*16*16, out_feature=320, num_patches=196, num_ViGBlocks=16, num_edges=9, head_num=1):
+#         super().__init__()
+#
+#         self.patchifier = CreatePatches()
+#         # self.patch_embedding = TwoLayerNN(in_features)
+#         self.patch_embedding = nn.Sequential(
+#             nn.Linear(in_features, out_feature//2),
+#             nn.BatchNorm1d(out_feature//2),
+#             nn.GELU(),
+#             nn.Linear(out_feature//2, out_feature//4),
+#             nn.BatchNorm1d(out_feature//4),
+#             nn.GELU(),
+#             nn.Linear(out_feature//4, out_feature//8),
+#             nn.BatchNorm1d(out_feature//8),
+#             nn.GELU(),
+#             nn.Linear(out_feature//8, out_feature//4),
+#             nn.BatchNorm1d(out_feature//4),
+#             nn.GELU(),
+#             nn.Linear(out_feature//4, out_feature//2),
+#             nn.BatchNorm1d(out_feature//2),
+#             nn.GELU(),
+#             nn.Linear(out_feature//2, out_feature),
+#             nn.BatchNorm1d(out_feature)
+#         )
+#         self.pose_embedding = nn.Parameter(torch.rand(num_patches, out_feature))
+#
+#         self.blocks = nn.Sequential(*[Block(out_feature, num_edges, head_num) for _ in range(num_ViGBlocks)])
+#
+#     def forward(self, x):
+#         x = self.patchifier(x)
+#         B, N, C = x.shape
+#         x = self.patch_embedding(x.reshape(B * N, -1)).reshape(B, N, -1)
+#         x = x + self.pose_embedding
+#
+#         x = self.blocks(x)
+#
+#         return x
+#
+# class Classifier(nn.Module):
+#     def __init__(self, in_features=3*16*16, out_feature=320, num_patches=196, num_ViGBlocks=16, hidden_layer=1024, num_edges=9, head_num=1, n_classes=1):
+#         super().__init__()
+#         self.backbone = GNN(in_features, out_feature,num_patches, num_ViGBlocks,num_edges, head_num)
+#
+#         self.predictor = nn.Sequential(
+#             nn.Linear(out_feature*num_patches, hidden_layer),
+#             nn.BatchNorm1d(hidden_layer),
+#             nn.GELU(),
+#             nn.Linear(hidden_layer, n_classes)
+#         )
+#
+#     def forward(self, x):
+#         features = self.backbone(x)
+#         B, N, C = features.shape
+#         x = self.predictor(features.view(B, -1))
+#         return features, x
 
 class EarlyStopping:
     def __init__(self, patience=5, delta=0):
