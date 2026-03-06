@@ -14,7 +14,6 @@ from torchmetrics.classification import BinaryF1Score, BinaryPrecision, BinaryRe
 from sklearn.metrics import classification_report
 from datetime import datetime
 from torchinfo import summary
-from torch_geometric import nn as pyg_nn
 from timm.layers.drop import DropPath
 from gcn_lib.torch_vertex import DyGraphConv2d
 
@@ -33,6 +32,9 @@ TEST_LABELS = pd.read_csv(f'{TEST_DIR}/RFMiD_Testing_Labels.csv')
 TEST_LABELS = TEST_LABELS[['ID', 'Disease_Risk']]
 TEST_DATA = f'{TEST_DIR}/Test'
 
+# pyramidvig-m
+DEPTH = [2, 2, 16, 2]
+CHANNELS = [96, 192, 384, 786]
 K_NEIGHBOURS = 9
 LEARNING_RATE = 1e-4
 USE_WEIGHT_BIAS = True
@@ -162,80 +164,36 @@ class ViGBlock(nn.Module):
         x = self.fnn(x)
         return x
 
-class Classifier(nn.Module):
-    def __init__(self, in_channels=3, num_classes=1, k=K_NEIGHBOURS, channels=None, blocks=None, drop_path_rate=0.1):
-        super(Classifier, self).__init__()
-
-        if channels is None:
-            channels = [48, 96, 240, 384]
-        if blocks is None:
-            blocks = [2, 2, 6, 2]
-
-        self.num_stages = len(channels)
-
-        # Stochastic depth decay rule
-        total_blocks = sum(blocks)
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, total_blocks)]
-
-        # Stem: 3 -> channels[0], spatial 224 -> 56
+class ViGNN(nn.Module):
+    def __init__(self, in_channels, num_classes, k, depths, channels, drop_path_rate):
+        super(ViGNN, self).__init__()
+        self.num_classes = num_classes
         self.stem = Stem(in_dim=in_channels, out_dim=channels[0])
-
-        # Build stages
         self.stages = nn.ModuleList()
         self.downsamples = nn.ModuleList()
-        block_idx = 0
-
-        for stage_i in range(self.num_stages):
-            # Downsample between stages (not before the first stage)
-            if stage_i > 0:
-                self.downsamples.append(
-                    Downsample(in_dim=channels[stage_i - 1], out_dim=channels[stage_i])
-                )
-            else:
-                self.downsamples.append(nn.Identity())
-
-            # ViG blocks for this stage
-            stage_blocks = nn.ModuleList()
-            for b in range(blocks[stage_i]):
-                dilation = 1
-                stage_blocks.append(
-                    ViGBlock(
-                        channels=channels[stage_i],
-                        k=k,
-                        dilation=dilation,
-                        drop_path=dpr[block_idx],
-                    )
-                )
-                block_idx += 1
-            self.stages.append(stage_blocks)
-
-        # Classification head
-        self.head = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Linear(channels[-1], 1024),
-            nn.BatchNorm1d(1024),
-            nn.GELU(),
-            nn.Dropout(0.5),
-            nn.Linear(1024, num_classes),
-        )
+        for i in range(len(depths)):
+            stage = nn.Sequential(*[
+                ViGBlock(channels[i], k, dilation=1, drop_path=drop_path_rate)
+                for _ in range(depths[i])
+            ])
+            self.stages.append(stage)
+            if i < len(depths) - 1:
+                self.downsamples.append(Downsample(in_dim=channels[i], out_dim=channels[i+1]))
+        self.norm = nn.BatchNorm1d(channels[-1])
+        self.head = nn.Linear(channels[-1], num_classes)
 
     def forward(self, x):
-        # Stem
         x = self.stem(x)
-
-        # Stages
-        for stage_i in range(self.num_stages):
-            x = self.downsamples[stage_i](x)
-            for block in self.stages[stage_i]:
-                x = block(x)
-
-        # Features before head (for potential feature extraction)
-        features = x
-
-        # Classification
-        out = self.head(features)
-        return features, out
+        B, C, H, W = x.shape
+        for i in range(len(self.stages)):
+            x = self.stages[i](x)
+            if i < len(self.stages) - 1:
+                x = x.reshape(B, -1, H, W)
+                x = self.downsamples[i](x)
+                B, C, H, W = x.shape
+        x = x.flatten(2).mean(dim=2)
+        x = self.norm(x)
+        x = self.head(x)
 
 class EarlyStopping:
     def __init__(self, patience=5, delta=0):
@@ -291,7 +249,7 @@ def train_one_epoch(dataloader, model, loss_fn, optimiser):
         inputs, targets = data
         inputs, targets = inputs.to(DEVICE), targets.to(DEVICE).float().unsqueeze(1)
         optimiser.zero_grad()
-        _, outputs = model(inputs)
+        outputs = model(inputs)
         loss = loss_fn(outputs, targets)
         loss.backward()
         optimiser.step()
@@ -479,6 +437,6 @@ if __name__ == '__main__':
     dataset_train = CustomImageDataset(df=TRAIN_LABELS, img_dir=TRAIN_DATA, transform=TRAIN_TRANSFORMS)
     dataset_val = CustomImageDataset(df=VAL_LABELS, img_dir=VAL_DATA, transform=TEST_TRANSFORMS)
     dataset_test = CustomImageDataset(df=TEST_LABELS, img_dir=TEST_DATA, transform=TEST_TRANSFORMS)
-    model = Classifier().to(DEVICE)
+    model = ViGNN(in_channels=3, num_classes=1, k=K_NEIGHBOURS, depths=DEPTH, channels=CHANNELS, drop_path_rate=0.0).to(DEVICE)
     print(summary(model, input_size=(TRAINING_BATCH_SIZE, 3, 224, 224)))
     UseModel(model, dataset_train, dataset_val, dataset_test)
