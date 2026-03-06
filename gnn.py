@@ -5,7 +5,8 @@ import pandas as pd
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from torch import arange, nn
+import torch_geometric
+from torch import nn
 from PIL import Image
 from torchvision.transforms import v2
 from torch.utils.data import Dataset, DataLoader
@@ -15,6 +16,7 @@ from datetime import datetime
 from torchinfo import summary
 from torch_geometric import nn as pyg_nn
 from timm.layers.drop import DropPath
+from gcn_lib.torch_vertex import DyGraphConv2d
 
 TRAIN_DIR = 'dataset/Training_Set/Training_Set'
 TRAIN_LABELS = pd.read_csv(f'{TRAIN_DIR}/RFMiD_Training_Labels.csv')
@@ -32,8 +34,7 @@ TEST_LABELS = TEST_LABELS[['ID', 'Disease_Risk']]
 TEST_DATA = f'{TEST_DIR}/Test'
 
 K_NEIGHBOURS = 9
-RES_BLOCKS = [3, 4, 6, 3]
-LEARNING_RATE = 1e-5
+LEARNING_RATE = 1e-4
 USE_WEIGHT_BIAS = True
 WEIGHT_DECAY = 1e-3
 EPOCHS = 150
@@ -70,29 +71,48 @@ class CustomImageDataset(Dataset):
             labels = self.target_transform(labels)
         return img, labels
 
-class CreatePatches(nn.Module):
-    def __init__(self, in_channels=3, patch_size=16, embed_dim=768):
+class Stem(nn.Module):
+    def __init__(self, in_dim=3, out_dim=768):
         super().__init__()
-        self.proj = nn.Conv2d(in_channels=in_channels, out_channels=embed_dim, kernel_size=patch_size, stride=patch_size)
+        self.convs = nn.Sequential(
+            nn.Conv2d(in_dim, out_dim // 2, 3, stride=2, padding=1),
+            nn.BatchNorm2d(out_dim // 2),
+            nn.ReLU(inplace=False),
+            nn.Conv2d(out_dim // 2, out_dim, 3, stride=2, padding=1),
+            nn.BatchNorm2d(out_dim),
+            nn.ReLU(inplace=False),
+            nn.Conv2d(out_dim, out_dim, 3, stride=1, padding=1),
+            nn.BatchNorm2d(out_dim),
+        )
 
     def forward(self, x):
-        x = self.proj(x)
-        x = x.flatten(2).transpose(1, 2)
+        x = self.convs(x)
+        return x
+
+class Downsample(nn.Module):
+    def __init__(self, in_dim=3, out_dim=768):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_dim, out_dim, 3, stride=2, padding=1),
+            nn.BatchNorm2d(out_dim),
+        )
+
+    def forward(self, x):
+        x = self.conv(x)
         return x
 
 class GrapherModule(nn.Module):
-    def __init__(self, in_channels, hidden_channels, k=K_NEIGHBOURS, dilation=1, drop_path=0.0):
+    def __init__(self, in_channels, hidden_channels, k, dilation, drop_path=0.0):
         super(GrapherModule, self).__init__()
         self.fc1 = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, 1, stride=1, padding=0),
             nn.BatchNorm2d(in_channels),
         )
-        edge_mlp = nn.Sequential(
-            nn.Linear(in_channels, hidden_channels),
+        self.graph_conv = nn.Sequential(
+            DyGraphConv2d(in_channels, hidden_channels, k, dilation, act="None"),
             nn.BatchNorm2d(hidden_channels),
             nn.GELU(),
         )
-        self.gcn = pyg_nn.DynamicEdgeConv(nn=edge_mlp, k=k, aggr='max')
 
         self.fc2 = nn.Sequential(
             nn.Conv2d(hidden_channels, in_channels, 1, 1, 0),
@@ -104,11 +124,11 @@ class GrapherModule(nn.Module):
         B, C, H, W = x.shape
         x = x.reshape(B, C, -1, 1).contiguous()
         shortcut = x
-        x = self.fc1()
-        x = self.gcn(x)
+        x = self.fc1(x)
+        x = self.graph_conv(x)
         x = self.fc2(x)
         x = self.drop_path(x) + shortcut
-        return x.reshape(B, C, H, W)
+        return x
 
 class FFNModule(nn.Module):
     def __init__(self, in_channels, hidden_channels, drop_path=0.0):
@@ -132,7 +152,7 @@ class FFNModule(nn.Module):
         return x
 
 class ViGBlock(nn.Module):
-    def __init__(self, channels, k=K_NEIGHBOURS, dilation=1, drop_path=0.0):
+    def __init__(self, channels, k, dilation, drop_path=0.0):
         super(ViGBlock, self).__init__()
         self.grapher = GrapherModule(channels, channels*2, k, dilation, drop_path)
         self.fnn = FFNModule(channels, channels*4, drop_path)
@@ -142,36 +162,80 @@ class ViGBlock(nn.Module):
         x = self.fnn(x)
         return x
 
-class ViGNN(nn.Module):
-    def __init__(self, in_features=3*16*16, out_feature=320, num_patches=196, num_ViGBlocks=16, num_edges=9, head_num=1):
-        super().__init__()
-        self.patchifier = CreatePatches(in_channels=3, patch_size=16, embed_dim=out_feature)
-        self.pose_embedding = nn.Parameter(torch.randn(1, num_patches, out_feature))
-        self.blocks = nn.Sequential(*[ViGBlock(out_feature, num_edges, head_num) for _ in range(num_ViGBlocks)])
-
-    def forward(self, x):
-        x = self.patchifier(x)
-        B, N, C = x.shape
-        x = x + self.pose_embedding
-        x = self.blocks(x)
-        return x
-
 class Classifier(nn.Module):
-    def __init__(self, in_features=3*16*16, out_feature=320, num_patches=196, num_ViGBlocks=16, hidden_layer=1024, num_edges=9, head_num=1, n_classes=1):
-        super().__init__()
-        self.backbone = ViGNN(in_features, out_feature,num_patches, num_ViGBlocks,num_edges, head_num)
-        self.predictor = nn.Sequential(
-            nn.Linear(out_feature, hidden_layer),
-            nn.BatchNorm1d(hidden_layer),
+    def __init__(self, in_channels=3, num_classes=1, k=K_NEIGHBOURS, channels=None, blocks=None, drop_path_rate=0.1):
+        super(Classifier, self).__init__()
+
+        if channels is None:
+            channels = [48, 96, 240, 384]
+        if blocks is None:
+            blocks = [2, 2, 6, 2]
+
+        self.num_stages = len(channels)
+
+        # Stochastic depth decay rule
+        total_blocks = sum(blocks)
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, total_blocks)]
+
+        # Stem: 3 -> channels[0], spatial 224 -> 56
+        self.stem = Stem(in_dim=in_channels, out_dim=channels[0])
+
+        # Build stages
+        self.stages = nn.ModuleList()
+        self.downsamples = nn.ModuleList()
+        block_idx = 0
+
+        for stage_i in range(self.num_stages):
+            # Downsample between stages (not before the first stage)
+            if stage_i > 0:
+                self.downsamples.append(
+                    Downsample(in_dim=channels[stage_i - 1], out_dim=channels[stage_i])
+                )
+            else:
+                self.downsamples.append(nn.Identity())
+
+            # ViG blocks for this stage
+            stage_blocks = nn.ModuleList()
+            for b in range(blocks[stage_i]):
+                dilation = 1
+                stage_blocks.append(
+                    ViGBlock(
+                        channels=channels[stage_i],
+                        k=k,
+                        dilation=dilation,
+                        drop_path=dpr[block_idx],
+                    )
+                )
+                block_idx += 1
+            self.stages.append(stage_blocks)
+
+        # Classification head
+        self.head = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(channels[-1], 1024),
+            nn.BatchNorm1d(1024),
             nn.GELU(),
-            nn.Linear(hidden_layer, n_classes)
+            nn.Dropout(0.5),
+            nn.Linear(1024, num_classes),
         )
 
     def forward(self, x):
-        features = self.backbone(x)
-        pooled_features = features.mean(dim=1)
-        logits = self.predictor(pooled_features)
-        return features, logits
+        # Stem
+        x = self.stem(x)
+
+        # Stages
+        for stage_i in range(self.num_stages):
+            x = self.downsamples[stage_i](x)
+            for block in self.stages[stage_i]:
+                x = block(x)
+
+        # Features before head (for potential feature extraction)
+        features = x
+
+        # Classification
+        out = self.head(features)
+        return features, out
 
 class EarlyStopping:
     def __init__(self, patience=5, delta=0):
@@ -207,12 +271,9 @@ def PrepData(dataset_train, dataset_val, dataset_test):
     negatives = total - positives
     pos_weight_vals = (negatives / positives).values
     pos_weights = torch.tensor(pos_weight_vals, dtype=torch.float32)
-    # pos_weights = torch.clamp(pos_weights, max=10.0)
 
     # print(dataset.__getitem__(3))
     # print(dataset.__len__())
-
-    torch.manual_seed(42)
 
     train_dataloader = DataLoader(dataset_train, batch_size=TRAINING_BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True)
     val_dataloader = DataLoader(dataset_val, batch_size=TEST_BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True)
@@ -292,7 +353,6 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
 
     train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData(dataset_train, dataset_val, dataset_test)
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
-    # loss_fn = nn.CrossEntropyLoss()
 
     actual_epochs = 0
     train_losses, val_losses = [], []
@@ -381,15 +441,12 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
     print(f'test f1 score = {f1_score:.4f}')
 
     # Logging
-    summary_path = 'vit.txt'
+    summary_path = 'gnn.txt'
     header = "date;time;learning_rate;weight_decay;weight_parameter;Threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n"
 
     now = datetime.now()
     date_str = now.strftime("%d-%m-%Y")
     time_str = now.strftime("%H:%M:%S")
-
-    label_cols = [c for c in dataset_train.df.columns if c != 'ID']
-    classes_str = ",".join(label_cols)
 
     weight_param_used = True if USE_WEIGHT_BIAS else False
     early_stopping_used = True if early_stopping.early_stop else False
@@ -397,7 +454,6 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
     line = (
         f"{date_str};"
         f"{time_str};"
-        f"{RES_BLOCKS};"
         f"{LEARNING_RATE};"
         f"{WEIGHT_DECAY};"
         f"{str(weight_param_used)};"
@@ -419,6 +475,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
 
 if __name__ == '__main__':
     assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
+    torch_geometric.seed_everything(42)
     dataset_train = CustomImageDataset(df=TRAIN_LABELS, img_dir=TRAIN_DATA, transform=TRAIN_TRANSFORMS)
     dataset_val = CustomImageDataset(df=VAL_LABELS, img_dir=VAL_DATA, transform=TEST_TRANSFORMS)
     dataset_test = CustomImageDataset(df=TEST_LABELS, img_dir=TEST_DATA, transform=TEST_TRANSFORMS)
