@@ -35,14 +35,14 @@ TEST_DATA = f'{TEST_DIR}/Test'
 # pyramidvig-m
 DEPTH = [2, 2, 16, 2]
 CHANNELS = [96, 192, 384, 786]
-K_NEIGHBOURS = 9
+K_NEIGHBOURS = 5
 LEARNING_RATE = 1e-4
 USE_WEIGHT_BIAS = True
 WEIGHT_DECAY = 1e-3
 EPOCHS = 150
 THRESHOLD = 0.5
-TRAINING_BATCH_SIZE = 32
-TEST_BATCH_SIZE = 32
+TRAINING_BATCH_SIZE = 64
+TEST_BATCH_SIZE = 64
 train_transform_list = [v2.ToImage(),v2.Resize((224, 224)), v2.RandomHorizontalFlip(0.5), v2.RandomRotation(degrees=15), v2.ConvertImageDtype(torch.float), v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
 TRAIN_TRANSFORMS = v2.Compose(train_transform_list)
 test_transform_list = [v2.ToImage(), v2.Resize((224, 224)), v2.ConvertImageDtype(torch.float), v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
@@ -165,7 +165,7 @@ class ViGBlock(nn.Module):
         return x
 
 class ViGNN(nn.Module):
-    def __init__(self, in_channels, num_classes, k, depths, channels, drop_path_rate):
+    def __init__(self, in_channels, num_classes, k, depths, channels, drop_path):
         super(ViGNN, self).__init__()
         self.num_classes = num_classes
         self.stem = Stem(in_dim=in_channels, out_dim=channels[0])
@@ -173,7 +173,7 @@ class ViGNN(nn.Module):
         self.downsamples = nn.ModuleList()
         for i in range(len(depths)):
             stage = nn.Sequential(*[
-                ViGBlock(channels[i], k, dilation=1, drop_path=drop_path_rate)
+                ViGBlock(channels[i], k, dilation=1, drop_path=drop_path)
                 for _ in range(depths[i])
             ])
             self.stages.append(stage)
@@ -401,7 +401,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
 
     # Logging
     summary_path = 'gnn.txt'
-    header = "date;time;learning_rate;weight_decay;weight_parameter;Threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n"
+    header = "date;time;learning_rate;k-neighbours;channels;depth;weight_decay;weight_parameter;Threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n"
 
     now = datetime.now()
     date_str = now.strftime("%d-%m-%Y")
@@ -414,6 +414,9 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
         f"{date_str};"
         f"{time_str};"
         f"{LEARNING_RATE};"
+        f"{K_NEIGHBOURS};"
+        f"{CHANNELS};"
+        f"{DEPTH};"
         f"{WEIGHT_DECAY};"
         f"{str(weight_param_used)};"
         f"{THRESHOLD};"
@@ -438,6 +441,6 @@ if __name__ == '__main__':
     dataset_train = CustomImageDataset(df=TRAIN_LABELS, img_dir=TRAIN_DATA, transform=TRAIN_TRANSFORMS)
     dataset_val = CustomImageDataset(df=VAL_LABELS, img_dir=VAL_DATA, transform=TEST_TRANSFORMS)
     dataset_test = CustomImageDataset(df=TEST_LABELS, img_dir=TEST_DATA, transform=TEST_TRANSFORMS)
-    model = ViGNN(in_channels=3, num_classes=1, k=K_NEIGHBOURS, depths=DEPTH, channels=CHANNELS, drop_path_rate=0.0).to(DEVICE)
+    model = ViGNN(in_channels=3, num_classes=1, k=K_NEIGHBOURS, depths=DEPTH, channels=CHANNELS, drop_path=0.0).to(DEVICE)
     print(summary(model, input_size=(TRAINING_BATCH_SIZE, 3, 224, 224)))
     UseModel(model, dataset_train, dataset_val, dataset_test)
