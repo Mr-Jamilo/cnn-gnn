@@ -194,6 +194,7 @@ class ViGNN(nn.Module):
         x = x.flatten(2).mean(dim=2)
         x = self.norm(x)
         x = self.head(x)
+        return x
 
 class EarlyStopping:
     def __init__(self, patience=5, delta=0):
@@ -282,7 +283,7 @@ def TestModel(model, loss_fn, dataloader):
     with torch.no_grad():
         for inputs, labels in dataloader:
             inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)
-            _, outputs = model(inputs)
+            outputs = model(inputs)
             test_loss += loss_fn(outputs, labels).item()
             outputs = torch.sigmoid(outputs) > THRESHOLD
             correct += (outputs == labels.bool()).sum().item()
@@ -330,7 +331,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
         with torch.no_grad():
             for inputs, labels in val_dataloader:
                 inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)
-                _, outputs = model(inputs)
+                outputs = model(inputs)
                 running_val_loss += loss_fn(outputs, labels).item()
 
                 outputs = torch.sigmoid(outputs) > THRESHOLD
