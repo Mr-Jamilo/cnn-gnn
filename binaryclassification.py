@@ -30,11 +30,11 @@ TEST_LABELS = TEST_LABELS[['ID', 'Disease_Risk']]
 TEST_DATA = f'{TEST_DIR}/Test'
 
 RES_BLOCKS = [3, 4, 6, 3]
-LEARNING_RATE = 1e-5
+LEARNING_RATE = 1e-4
 USE_WEIGHT_BIAS = True
 WEIGHT_DECAY = 1e-3
 EPOCHS = 150
-THRESHOLD = 0.9
+THRESHOLD = 0.6
 TRAINING_BATCH_SIZE = 32
 TEST_BATCH_SIZE = 32
 train_transform_list = [v2.ToImage(),v2.Resize((224, 224)), v2.RandomHorizontalFlip(0.5), v2.RandomRotation(degrees=15), v2.ConvertImageDtype(torch.float), v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
@@ -174,7 +174,6 @@ def PrepData(dataset_train, dataset_val, dataset_test):
 
     return train_dataloader, val_dataloader, test_dataloader, pos_weights
 
-
 def train_one_epoch(dataloader, model, loss_fn, optimiser):
     loss_list = []
     correct = 0
@@ -239,7 +238,6 @@ def TestModel(model, loss_fn, dataloader):
     print(classification_report(val_targets_np, val_preds_np, zero_division=0))
 
     return avg_loss, accuracy, f1_score, precision, recall
-
 
 def UseModel(model, dataset_train, dataset_val, dataset_test):
     optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
@@ -372,7 +370,6 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
         if write_header:
             f.write(header)
         f.write(line)
-
 
 if __name__ == '__main__':
     assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."

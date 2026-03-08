@@ -1,4 +1,5 @@
 #TODO look into using bash scripts (https://github.com/Delphboy/SuperCap/tree/main)
+#TODO test with LeNet
 
 import os
 import pandas as pd
@@ -28,10 +29,12 @@ TEST_DIR = 'dataset/Test_Set/Test_Set'
 TEST_LABELS = pd.read_csv(f'{TEST_DIR}/RFMiD_Testing_Labels.csv')
 TEST_LABELS = TEST_LABELS[['ID', 'DR', 'MH', 'TSLN', 'ODC']]
 TEST_DATA = f'{TEST_DIR}/Test'
+
 RES_BLOCKS = [2, 2, 2, 2]
 NUM_CLASSES = 4
-LEARNING_RATE = 4e-5
-USE_WEIGHT_BIAS = False
+LEARNING_RATE = 1e-4
+USE_WEIGHT_BIAS = True
+WEIGHT_DECAY = 1e-2
 EPOCHS = 150
 THRESHOLD = 0.8
 TRAINING_BATCH_SIZE = 32
@@ -244,7 +247,7 @@ def TestModel(model, loss_fn, dataloader):
 
 
 def UseModel(model, dataset_train, dataset_val, dataset_test):
-    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=10)
     early_stopping = EarlyStopping(patience=25, delta=0.0001)
 
@@ -252,9 +255,6 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
     loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE)) if USE_WEIGHT_BIAS else nn.BCEWithLogitsLoss()
 
     actual_epochs = 0
-    patience = 5
-    counter = 0
-    best_val_loss = np.inf
 
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
@@ -352,9 +352,6 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
     label_cols = [c for c in dataset_train.df.columns if c != 'ID']
     classes_str = ",".join(label_cols)
 
-    lr = LEARNING_RATE
-    wd = optimiser.param_groups[0].get('weight_decay', 0)
-
     weight_param_used = True if USE_WEIGHT_BIAS else False
     early_stopping_used = True if early_stopping.early_stop else False
 
@@ -363,8 +360,8 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
         f"{time_str};"
         f"{RES_BLOCKS};"
         f"{len(label_cols)}({classes_str});"
-        f"{lr};"
-        f"{wd};"
+        f"{LEARNING_RATE};"
+        f"{WEIGHT_DECAY};"
         f"{str(weight_param_used)};"
         f"{THRESHOLD};"
         f"{actual_epochs};"

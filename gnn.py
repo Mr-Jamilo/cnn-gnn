@@ -32,10 +32,11 @@ TEST_LABELS = pd.read_csv(f'{TEST_DIR}/RFMiD_Testing_Labels.csv')
 TEST_LABELS = TEST_LABELS[['ID', 'Disease_Risk']]
 TEST_DATA = f'{TEST_DIR}/Test'
 
-# pyramidvig-m
-DEPTH = [2, 2, 16, 2]
-CHANNELS = [96, 192, 384, 786]
-K_NEIGHBOURS = 5
+# pyramidvig
+DEPTH = [2, 2, 6, 2] 
+CHANNELS = [80, 160, 400, 640]
+STOCHASTIC_PATH = 0.1
+K_NEIGHBOURS = 7
 LEARNING_RATE = 1e-4
 USE_WEIGHT_BIAS = True
 WEIGHT_DECAY = 1e-3
@@ -197,7 +198,7 @@ class ViGNN(nn.Module):
         return x
 
 class EarlyStopping:
-    def __init__(self, patience=5, delta=0):
+    def __init__(self, patience=5, delta=0.0):
         self.patience = patience
         self.delta = delta
         self.best_score = None
@@ -401,7 +402,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
 
     # Logging
     summary_path = 'gnn.txt'
-    header = "date;time;learning_rate;k-neighbours;channels;depth;weight_decay;weight_parameter;Threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n"
+    header = "date;time;learning_rate;k-neighbours;channels;depth;stochastic_path;weight_decay;weight_parameter;Threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n"
 
     now = datetime.now()
     date_str = now.strftime("%d-%m-%Y")
@@ -417,6 +418,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
         f"{K_NEIGHBOURS};"
         f"{CHANNELS};"
         f"{DEPTH};"
+        f"{STOCHASTIC_PATH};"
         f"{WEIGHT_DECAY};"
         f"{str(weight_param_used)};"
         f"{THRESHOLD};"
@@ -441,6 +443,6 @@ if __name__ == '__main__':
     dataset_train = CustomImageDataset(df=TRAIN_LABELS, img_dir=TRAIN_DATA, transform=TRAIN_TRANSFORMS)
     dataset_val = CustomImageDataset(df=VAL_LABELS, img_dir=VAL_DATA, transform=TEST_TRANSFORMS)
     dataset_test = CustomImageDataset(df=TEST_LABELS, img_dir=TEST_DATA, transform=TEST_TRANSFORMS)
-    model = ViGNN(in_channels=3, num_classes=1, k=K_NEIGHBOURS, depths=DEPTH, channels=CHANNELS, drop_path=0.0).to(DEVICE)
+    model = ViGNN(in_channels=3, num_classes=1, k=K_NEIGHBOURS, depths=DEPTH, channels=CHANNELS, drop_path=STOCHASTIC_PATH).to(DEVICE)
     print(summary(model, input_size=(TRAINING_BATCH_SIZE, 3, 224, 224)))
     UseModel(model, dataset_train, dataset_val, dataset_test)
