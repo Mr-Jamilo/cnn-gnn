@@ -452,7 +452,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
         f"{date_str};"
         f"{time_str};"
         f"{opt.learning_rate};"
-        f"{opt.learning_rate};"
+        f"{opt.k_neighbours};"
         f"{channels};"
         f"{depth};"
         f"{opt.graph_layer_type};"
