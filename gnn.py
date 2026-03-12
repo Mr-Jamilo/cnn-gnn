@@ -1,5 +1,3 @@
-# TODO look into using bash scripts (https://github.com/Delphboy/SuperCap/tree/main)
-
 import os
 import opts
 import pandas as pd
@@ -12,7 +10,7 @@ from torch import nn
 from PIL import Image
 from torchvision.transforms import v2
 from torch.utils.data import Dataset, DataLoader
-from torchmetrics.classification import BinaryF1Score, BinaryPrecision, BinaryRecall
+from torchmetrics.classification import F1Score, Precision, Recall
 from sklearn.metrics import classification_report
 from datetime import datetime
 from torchinfo import summary
@@ -20,26 +18,13 @@ from timm.layers.drop import DropPath
 from gcn_lib.torch_vertex import DyGraphConv2d
 from torch_cluster import knn_graph
 
-train_transform_list = [
-    v2.ToImage(),
-    v2.Resize((224, 224)),
-    v2.RandomHorizontalFlip(0.5),
-    v2.RandomRotation(degrees=15),
-    v2.ConvertImageDtype(torch.float),
-    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-]
+train_transform_list = [v2.ToImage(), v2.Resize((224, 224)), v2.RandomHorizontalFlip(0.5), v2.RandomRotation(degrees=15), v2.ConvertImageDtype(torch.float), v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
 TRAIN_TRANSFORMS = v2.Compose(train_transform_list)
-test_transform_list = [
-    v2.ToImage(),
-    v2.Resize((224, 224)),
-    v2.ConvertImageDtype(torch.float),
-    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-]
+test_transform_list = [v2.ToImage(), v2.Resize((224, 224)), v2.ConvertImageDtype(torch.float), v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
 TEST_TRANSFORMS = v2.Compose(test_transform_list)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 assert torch.cuda.is_available(), ("CUDA is not available. Please run on a machine with a GPU.")
-
 
 class CustomImageDataset(Dataset):
     def __init__(self, df, img_dir, transform=None, target_transform=None):
@@ -63,7 +48,6 @@ class CustomImageDataset(Dataset):
             labels = self.target_transform(labels)
         return img, labels
 
-
 class Stem(nn.Module):
     def __init__(self, in_dim=3, out_dim=768):
         super().__init__()
@@ -82,7 +66,6 @@ class Stem(nn.Module):
         x = self.convs(x)
         return x
 
-
 class Downsample(nn.Module):
     def __init__(self, in_dim=3, out_dim=768):
         super().__init__()
@@ -94,7 +77,6 @@ class Downsample(nn.Module):
     def forward(self, x):
         x = self.conv(x)
         return x
-
 
 class DyGraphAtt2d(nn.Module):
     def __init__(self, in_channels, out_channels, k, heads=1):
@@ -110,7 +92,6 @@ class DyGraphAtt2d(nn.Module):
         out = self.gat(x_flat, edge_index)
         out = out.reshape(B, N, -1).transpose(1, 2).unsqueeze(-1)
         return out
-
 
 class DyGraphGIN2d(nn.Module):
     def __init__(self, in_channels, out_channels, k, eps=0.0, train_eps=True):
@@ -132,7 +113,6 @@ class DyGraphGIN2d(nn.Module):
         out = self.gin(x_flat, edge_index)
         out = out.reshape(B, N, -1).transpose(1, 2).unsqueeze(-1)
         return out
-
 
 class GrapherModule(nn.Module):
     def __init__(self, opt, in_channels, hidden_channels, k, dilation, drop_path=0.0):
@@ -185,7 +165,6 @@ class GrapherModule(nn.Module):
         x = self.drop_path(x) + shortcut
         return x
 
-
 class FFNModule(nn.Module):
     def __init__(self, in_channels, hidden_channels, drop_path=0.0):
         super(FFNModule, self).__init__()
@@ -207,7 +186,6 @@ class FFNModule(nn.Module):
         x = self.drop_path(x) + shortcut
         return x
 
-
 class ViGBlock(nn.Module):
     def __init__(self, opt, channels, k, dilation, drop_path=0.0):
         super(ViGBlock, self).__init__()
@@ -219,7 +197,6 @@ class ViGBlock(nn.Module):
         x = self.fnn(x)
         return x
 
-
 class ViGNN(nn.Module):
     def __init__(self, opt, in_channels, num_classes, k, depths, channels, drop_path):
         super(ViGNN, self).__init__()
@@ -228,12 +205,10 @@ class ViGNN(nn.Module):
         self.stages = nn.ModuleList()
         self.downsamples = nn.ModuleList()
         for i in range(len(depths)):
-            stage = nn.Sequential(
-                *[ following
-                    ViGBlock(opt, channels[i], k, dilation=1, drop_path=drop_path)
-                    for _ in range(depths[i])
-                ]
-            )
+            stage = nn.Sequential(*[
+                ViGBlock(opt, channels[i], k, dilation=1, drop_path=drop_path)
+                for _ in range(depths[i])
+            ])
             self.stages.append(stage)
             if i < len(depths) - 1:
                 self.downsamples.append(
@@ -255,7 +230,6 @@ class ViGNN(nn.Module):
         x = self.norm(x)
         x = self.head(x)
         return x
-
 
 class EarlyStopping:
     def __init__(self, patience=5, delta=0.0):
@@ -284,7 +258,6 @@ class EarlyStopping:
     def load_best_model(self, model):
         model.load_state_dict(self.best_model_state)
 
-
 def PrepData(opt, dataset_train, dataset_val, dataset_test):
     label_cols = [col for col in dataset_train.df.columns if col not in ["ID"]]
     positives = dataset_train.df[label_cols].sum(axis=0).astype(float)
@@ -302,12 +275,11 @@ def PrepData(opt, dataset_train, dataset_val, dataset_test):
 
     return train_dataloader, val_dataloader, test_dataloader, pos_weights
 
-
 def train_one_epoch(opt, dataloader, model, loss_fn, optimiser):
     loss_list = []
     correct = 0
     total = 0
-    f1 = BinaryF1Score().to(DEVICE)
+    f1 = F1Score(task='multiclass', num_classes=2, average='macro').to(DEVICE)
 
     for batch, data in enumerate(dataloader):
         inputs, targets = data
@@ -331,15 +303,14 @@ def train_one_epoch(opt, dataloader, model, loss_fn, optimiser):
     f1 = f1.compute().item()
     return avg_loss, avg_accuracy, f1
 
-
 def TestModel(opt, model, loss_fn, dataloader):
     model.eval()
     test_loss = 0
     correct = 0
     total = 0
-    metric = BinaryF1Score().to(DEVICE)
-    precision_metric = BinaryPrecision().to(DEVICE)
-    recall_metric = BinaryPrecision().to(DEVICE)
+    metric = F1Score(task='multiclass', num_classes=2, average='macro').to(DEVICE)
+    precision_metric = Precision(task='multiclass', num_classes=2, average='macro').to(DEVICE)
+    recall_metric = Precision(task='multiclass', num_classes=2, average='macro').to(DEVICE)
 
     all_preds = []
     all_targets = []
@@ -369,7 +340,6 @@ def TestModel(opt, model, loss_fn, dataloader):
 
     return avg_loss, accuracy, f1_score, precision, recall
 
-
 def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     if opt.weight_decay != -1:
         optimiser = torch.optim.Adam(model.parameters(), lr=opt.learning_rate, weight_decay=opt.weight_decay)
@@ -395,7 +365,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
         running_val_loss = 0.0
         correct = 0
         total = 0
-        val_f1 = BinaryF1Score().to(DEVICE)
+        val_f1 = F1Score(task='multiclass', num_classes=2, average='macro').to(DEVICE)
         with torch.no_grad():
             for inputs, labels in val_dataloader:
                 inputs, labels = (inputs.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1))
@@ -504,7 +474,6 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
         if write_header:
             f.write(header)
         f.write(line)
-
 
 if __name__ == "__main__":
     opt = opts.parse_opts()
