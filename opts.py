@@ -10,7 +10,7 @@ def parse_opts():
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--size', type=str, default='medium', help='Size of the model. tiny|small|medium|big')
     parser.add_argument('--graph_layer_type', type=str, default='GCN', help='Type of layer during graph construction. GCN|GAT|GIN')
-    parser.add_argument('--weight_decay', type=float, default=1e-3, help='Weight decay')
+    parser.add_argument('--weight_decay', type=float, default=1e-3, help='Weight decay. Set as -1 for no weight decay')
     parser.add_argument('--k_neighbours', type=int, default=7, help='Number of edges for each node')
     parser.add_argument('--stochastic_path', type=float, default=0.1, help='Rate of paths to drop')
     parser.add_argument('--threshold', type=float, default=0.5, help='Threshold for binary classification')
@@ -23,7 +23,7 @@ def parse_opts():
     assert args.epochs > 0, 'Epochs should be greater than 0'
     assert args.threshold >= 0 and args.threshold < 1, 'Threshold should be between 0 and 1'
     assert args.k_neighbours > 0, 'K_neighbours should be greater than 0'
-    assert args.weight_decay > 0, 'Weight decay should be greater than 0'
+    assert (args.weight_decay < 1 and args.weight_decay > 0) or args.weight_decay == -1, 'Weight decay should be between 0 and 1 or equal to -1'
     assert args.batch_size > 0, 'Batch size should be greater than 0'
 
     return args
