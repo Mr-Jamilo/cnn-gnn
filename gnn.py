@@ -101,7 +101,7 @@ class DyGraphGIN2d(nn.Module):
             nn.Linear(in_channels, out_channels),
             nn.BatchNorm1d(out_channels),
             nn.GELU(),
-            nn.Linear(out_channels, out_channels),
+            nn.Linear(out_channels, out_channels)
         )
         self.gin = tg_nn.GINConv(mlp, eps=eps, train_eps=train_eps)
 
@@ -120,30 +120,30 @@ class GrapherModule(nn.Module):
         self.graph_type = opt.graph_layer_type
         self.fc1 = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, 1, stride=1, padding=0),
-            nn.BatchNorm2d(in_channels),
+            nn.BatchNorm2d(in_channels)
         )
 
         self.graph_conv = nn.Sequential(
             DyGraphConv2d(in_channels, hidden_channels, k, dilation, act="None"),
             nn.BatchNorm2d(hidden_channels),
-            nn.GELU(),
+            nn.GELU()
         )
 
         self.graph_att = nn.Sequential(
             DyGraphAtt2d(in_channels, hidden_channels, k=k, heads=4),
             nn.BatchNorm2d(hidden_channels),
-            nn.GELU(),
+            nn.GELU()
         )
 
         self.graph_iso = nn.Sequential(
             DyGraphGIN2d(in_channels, hidden_channels, k=k),
             nn.BatchNorm2d(hidden_channels),
-            nn.GELU(),
+            nn.GELU()
         )
 
         self.fc2 = nn.Sequential(
             nn.Conv2d(hidden_channels, in_channels, 1, 1, 0),
-            nn.BatchNorm2d(in_channels),
+            nn.BatchNorm2d(in_channels)
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
@@ -171,11 +171,11 @@ class FFNModule(nn.Module):
         self.fc1 = nn.Sequential(
             nn.Conv2d(in_channels, hidden_channels, 1, 1, 0),
             nn.BatchNorm2d(hidden_channels),
-            nn.GELU(),
+            nn.GELU()
         )
         self.fc2 = nn.Sequential(
             nn.Conv2d(hidden_channels, in_channels, 1, 1, 0),
-            nn.BatchNorm2d(in_channels),
+            nn.BatchNorm2d(in_channels)
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
@@ -211,9 +211,7 @@ class ViGNN(nn.Module):
             ])
             self.stages.append(stage)
             if i < len(depths) - 1:
-                self.downsamples.append(
-                    Downsample(in_dim=channels[i], out_dim=channels[i + 1])
-                )
+                self.downsamples.append(Downsample(in_dim=channels[i], out_dim=channels[i + 1]))
         self.norm = nn.BatchNorm1d(channels[-1])
         self.head = nn.Linear(channels[-1], num_classes)
 
@@ -256,10 +254,11 @@ class EarlyStopping:
             self.counter = 0
 
     def load_best_model(self, model):
+        torch.save(self.best_model_state, 'weights/binary/vignn.pth')
         model.load_state_dict(self.best_model_state)
 
 def PrepData(opt, dataset_train, dataset_val, dataset_test):
-    label_cols = [col for col in dataset_train.df.columns if col not in ["ID"]]
+    label_cols = [col for col in data if col not in ["ID"]]
     positives = dataset_train.df[label_cols].sum(axis=0).astype(float)
     total = len(dataset_train.df)
     negatives = total - positives
@@ -478,6 +477,18 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
             f.write(header)
         f.write(line)
 
+def predict_image(model, image):
+    model.eval()
+    img = Image.open(image).convert('RGB')
+    img_tensor = TEST_TRANSFORMS(img).unsqueeze(0).to(DEVICE)
+    with torch.no_grad():
+        probability = torch.sigmoid(output).item()
+        prediction = 1 if probability > 0.5 else 0
+
+    return {
+        'disease_risk': prediction,
+        'probability': round(probability, 4)
+    }
 
 if __name__ == "__main__":
     opt = opts.parse_opts()
