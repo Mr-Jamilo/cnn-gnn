@@ -18,9 +18,9 @@ from timm.layers.drop import DropPath
 from gcn_lib.torch_vertex import DyGraphConv2d
 from torch_cluster import knn_graph
 
-train_transform_list = [v2.ToImage(), v2.Resize((224, 224)), v2.RandomHorizontalFlip(0.5), v2.RandomRotation(degrees=15), v2.ConvertImageDtype(torch.float), v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
+train_transform_list = [v2.ToImage(),v2.Resize((224, 224)),v2.RandomHorizontalFlip(0.5),v2.RandomRotation(degrees=15),v2.ConvertImageDtype(torch.float),v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
 TRAIN_TRANSFORMS = v2.Compose(train_transform_list)
-test_transform_list = [v2.ToImage(), v2.Resize((224, 224)), v2.ConvertImageDtype(torch.float), v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
+test_transform_list = [v2.ToImage(),v2.Resize((224, 224)),v2.ConvertImageDtype(torch.float),v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
 TEST_TRANSFORMS = v2.Compose(test_transform_list)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -269,7 +269,7 @@ def PrepData(opt, dataset_train, dataset_val, dataset_test):
     # print(dataset.__getitem__(3))
     # print(dataset.__len__())
 
-    train_dataloader = DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True, num_workers=8, pin_memory=True)
+    train_dataloader = DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True, num_workers=8,pin_memory=True)
     val_dataloader = DataLoader(dataset_val, batch_size=opt.batch_size, shuffle=True, num_workers=8, pin_memory=True)
     test_dataloader = DataLoader(dataset_test, batch_size=opt.batch_size, shuffle=False, num_workers=8,pin_memory=True)
 
@@ -279,7 +279,7 @@ def train_one_epoch(opt, dataloader, model, loss_fn, optimiser):
     loss_list = []
     correct = 0
     total = 0
-    f1 = F1Score(task='multiclass', num_classes=2, average='macro').to(DEVICE)
+    f1 = F1Score(task="multiclass", num_classes=2, average="macro").to(DEVICE)
 
     for batch, data in enumerate(dataloader):
         inputs, targets = data
@@ -296,21 +296,22 @@ def train_one_epoch(opt, dataloader, model, loss_fn, optimiser):
         correct += (outputs == targets.bool()).sum().item()
         total += targets.numel()
 
-        print(f"  Batch {batch + 1}/{len(dataloader)} - Loss: {loss.item():.4f} - Acc: {(correct/total):.4f}", end='\r')
+        print(f"  Batch {batch + 1}/{len(dataloader)} - Loss: {loss.item():.4f} - Acc: {(correct / total):.4f}", end="\r")
 
     avg_loss = np.mean(loss_list)
     avg_accuracy = correct / total
     f1 = f1.compute().item()
     return avg_loss, avg_accuracy, f1
 
+
 def TestModel(opt, model, loss_fn, dataloader):
     model.eval()
     test_loss = 0
     correct = 0
     total = 0
-    metric = F1Score(task='multiclass', num_classes=2, average='macro').to(DEVICE)
-    precision_metric = Precision(task='multiclass', num_classes=2, average='macro').to(DEVICE)
-    recall_metric = Precision(task='multiclass', num_classes=2, average='macro').to(DEVICE)
+    metric = F1Score(task="multiclass", num_classes=2, average="macro").to(DEVICE)
+    precision_metric = Precision(task="multiclass", num_classes=2, average="macro").to(DEVICE)
+    recall_metric = Recall(task="multiclass", num_classes=2, average="macro").to(DEVICE)
 
     all_preds = []
     all_targets = []
@@ -359,13 +360,15 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     for epoch in range(opt.epochs):
         print(f"Epoch {epoch + 1}/{opt.epochs}")
         model.train(True)
-        train_loss, train_acc, train_f1 = train_one_epoch(opt, train_dataloader, model, loss_fn, optimiser)
+        train_loss, train_acc, train_f1 = train_one_epoch(
+            opt, train_dataloader, model, loss_fn, optimiser
+        )
         # train_loss = train_one_epoch(train_dataloader, model, loss_fn, optimiser)
         model.eval()
         running_val_loss = 0.0
         correct = 0
         total = 0
-        val_f1 = F1Score(task='multiclass', num_classes=2, average='macro').to(DEVICE)
+        val_f1 = F1Score(task="multiclass", num_classes=2, average="macro").to(DEVICE)
         with torch.no_grad():
             for inputs, labels in val_dataloader:
                 inputs, labels = (inputs.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1))
@@ -475,6 +478,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
             f.write(header)
         f.write(line)
 
+
 if __name__ == "__main__":
     opt = opts.parse_opts()
     assert torch.cuda.is_available(), ("CUDA is not available. Please run on a machine with a GPU.")
@@ -518,6 +522,6 @@ if __name__ == "__main__":
     dataset_train = CustomImageDataset(df=TRAIN_LABELS, img_dir=TRAIN_DATA, transform=TRAIN_TRANSFORMS)
     dataset_val = CustomImageDataset(df=VAL_LABELS, img_dir=VAL_DATA, transform=TEST_TRANSFORMS)
     dataset_test = CustomImageDataset(df=TEST_LABELS, img_dir=TEST_DATA, transform=TEST_TRANSFORMS)
-    model = ViGNN(opt, in_channels=3, num_classes=1, k=opt.k_neighbours, depths=depth, channels=channels, drop_path=opt.stochastic_path,).to(DEVICE)
+    model = ViGNN(opt, in_channels=3, num_classes=1, k=opt.k_neighbours, depths=depth, channels=channels, drop_path=opt.stochastic_path).to(DEVICE)
     print(summary(model, input_size=(opt.batch_size, 3, 224, 224)))
     UseModel(opt, model, dataset_train, dataset_val, dataset_test)
