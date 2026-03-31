@@ -342,16 +342,7 @@ class CNNGNNModel(nn.Module):
         super(CNNGNNModel, self).__init__()
 
         self.cnn = CNNFeatureExtractor(ResidualBlock, cnn_blocks, extraction_layer)
-
-        self.gnn = GNNClassifier(
-            opt=opt,
-            in_channels=self.cnn.out_channels,
-            in_spatial=self.cnn.out_spatial,
-            num_classes=1,
-            channels=gnn_channels,
-            k=k,
-            drop_path=drop_path,
-        )
+        self.gnn = GNNClassifier(opt=opt, in_channels=self.cnn.out_channels, in_spatial=self.cnn.out_spatial, num_classes=1, channels=gnn_channels, k=k, drop_path=drop_path)
 
         self.extraction_layer = extraction_layer
         self.cnn_out_channels = self.cnn.out_channels
