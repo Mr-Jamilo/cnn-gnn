@@ -1,8 +1,3 @@
-"""
-Architecture:
-    Input Image -> CNN Feature Extractor -> GNN Classifier -> Binary Output
-"""
-
 import os
 import opts
 import pandas as pd
@@ -23,28 +18,14 @@ from timm.layers.drop import DropPath
 from gcn_lib.torch_vertex import DyGraphConv2d
 from torch_cluster import knn_graph
 
-train_transform_list = [
-    v2.ToImage(),
-    v2.Resize((224, 224)),
-    v2.RandomHorizontalFlip(0.5),
-    v2.RandomRotation(degrees=15),
-    v2.ConvertImageDtype(torch.float),
-    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-]
+train_transform_list = [v2.ToImage(), v2.Resize((224, 224)), v2.RandomHorizontalFlip(0.5), v2.RandomRotation(degrees=15), v2.ConvertImageDtype(torch.float), v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])]
 TRAIN_TRANSFORMS = v2.Compose(train_transform_list)
 
-test_transform_list = [
-    v2.ToImage(),
-    v2.Resize((224, 224)),
-    v2.ConvertImageDtype(torch.float),
-    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-]
+test_transform_list = [v2.ToImage(), v2.Resize((224, 224)), v2.ConvertImageDtype(torch.float), v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])]
 TEST_TRANSFORMS = v2.Compose(test_transform_list)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-assert torch.cuda.is_available(), (
-    "CUDA is not available. Please run on a machine with a GPU."
-)
+assert torch.cuda.is_available(), ("CUDA is not available. Please run on a machine with a GPU.")
 
 class CustomImageDataset(Dataset):
     def __init__(self, df, img_dir, transform=None, target_transform=None):
@@ -331,7 +312,7 @@ class GNNClassifier(nn.Module):
             x = stage(x)
             if i < len(self.stages) - 1:
                 x = self.downsamples[i](x)
-        x = x.flatten(2).mean(dim=2)  # (B, C)
+        x = x.flatten(2).mean(dim=2)
         x = self.norm(x)
         x = self.head(x)
 
