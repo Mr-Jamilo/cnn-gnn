@@ -18,10 +18,8 @@ from timm.layers.drop import DropPath
 from gcn_lib.torch_vertex import DyGraphConv2d
 from torch_cluster import knn_graph
 
-train_transform_list = [v2.ToImage(),v2.Resize((224, 224)),v2.RandomHorizontalFlip(0.5),v2.RandomRotation(degrees=15),v2.ConvertImageDtype(torch.float),v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
-TRAIN_TRANSFORMS = v2.Compose(train_transform_list)
-test_transform_list = [v2.ToImage(),v2.Resize((224, 224)),v2.ConvertImageDtype(torch.float),v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
-TEST_TRANSFORMS = v2.Compose(test_transform_list)
+TRAIN_TRANSFORMS = v2.Compose([v2.ToImage(),v2.Resize((224, 224)),v2.RandomHorizontalFlip(0.5),v2.RandomRotation(degrees=15),v2.ConvertImageDtype(torch.float),v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+TEST_TRANSFORMS = v2.Compose([v2.ToImage(),v2.Resize((224, 224)),v2.ConvertImageDtype(torch.float),v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 assert torch.cuda.is_available(), ("CUDA is not available. Please run on a machine with a GPU.")
@@ -59,7 +57,7 @@ class Stem(nn.Module):
             nn.BatchNorm2d(out_dim),
             nn.ReLU(inplace=False),
             nn.Conv2d(out_dim, out_dim, 3, stride=1, padding=1),
-            nn.BatchNorm2d(out_dim),
+            nn.BatchNorm2d(out_dim)
         )
 
     def forward(self, x):
@@ -71,7 +69,7 @@ class Downsample(nn.Module):
         super().__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(in_dim, out_dim, 3, stride=2, padding=1),
-            nn.BatchNorm2d(out_dim),
+            nn.BatchNorm2d(out_dim)
         )
 
     def forward(self, x):
@@ -254,7 +252,8 @@ class EarlyStopping:
             self.counter = 0
 
     def load_best_model(self, model):
-        torch.save(self.best_model_state, 'weights/binary/vignn.pth')
+        os.makedirs("../../weights/binary", exist_ok=True)
+        torch.save(self.best_model_state, '../../weights/binary/vignn.pth')
         model.load_state_dict(self.best_model_state)
 
 def PrepData(opt, dataset_train, dataset_val, dataset_test):
@@ -359,9 +358,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     for epoch in range(opt.epochs):
         print(f"Epoch {epoch + 1}/{opt.epochs}")
         model.train(True)
-        train_loss, train_acc, train_f1 = train_one_epoch(
-            opt, train_dataloader, model, loss_fn, optimiser
-        )
+        train_loss, train_acc, train_f1 = train_one_epoch(opt, train_dataloader, model, loss_fn, optimiser)
         # train_loss = train_one_epoch(train_dataloader, model, loss_fn, optimiser)
         model.eval()
         running_val_loss = 0.0
@@ -409,10 +406,9 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.legend()
-    plt.savefig("loss_graph.png")
+    plt.savefig("gnn_loss_graph.png")
     # plt.show()
 
-    # --- Plot Accuracy ---
     plt.figure(figsize=(10, 5))
     plt.plot(train_accs, label="Train Accuracy")
     plt.plot(val_accs, label="Val Accuracy")
@@ -420,7 +416,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     plt.xlabel("Epoch")
     plt.ylabel("Accuracy")
     plt.legend()
-    plt.savefig("accuracy_graph.png")
+    plt.savefig("gnn_accuracy_graph.png")
     # plt.show()
 
     plt.figure(figsize=(10, 5))
@@ -430,7 +426,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     plt.xlabel("Epoch")
     plt.ylabel("F1")
     plt.legend()
-    plt.savefig("f1_graph.png")
+    plt.savefig("gnn_f1_graph.png")
     # plt.show()
 
     early_stopping.load_best_model(model)
@@ -439,7 +435,6 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     print(f"test acc = {test_acc:.4f}")
     print(f"test f1 score = {f1_score:.4f}")
 
-    # Logging
     summary_path = "gnn.txt"
     header = "date;time;learning_rate;k-neighbours;channels;depth;graph_layer_type;stochastic_path;weight_decay;weight_parameter;Threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n"
 

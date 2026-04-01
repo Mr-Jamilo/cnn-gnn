@@ -126,8 +126,8 @@ class EarlyStopping:
             self.counter = 0
 
     def load_best_model(self, model):
-        os.makedirs("weights/binary", exist_ok=True)
-        torch.save(self.best_model_state, "weights/binary/cnn.pth")
+        os.makedirs("../../weights/binary", exist_ok=True)
+        torch.save(self.best_model_state, "../../weights/binary/cnn.pth")
         model.load_state_dict(self.best_model_state)
 
 
@@ -285,7 +285,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.legend()
-    plt.savefig("cnn_binary_loss_graph.png")
+    plt.savefig("cnn_loss_graph.png")
 
     plt.figure(figsize=(10, 5))
     plt.plot(train_accs, label="Train Accuracy")
@@ -294,7 +294,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     plt.xlabel("Epoch")
     plt.ylabel("Accuracy")
     plt.legend()
-    plt.savefig("cnn_binary_accuracy_graph.png")
+    plt.savefig("cnn_accuracy_graph.png")
 
     plt.figure(figsize=(10, 5))
     plt.plot(train_f1s, label="Train F1")
@@ -303,7 +303,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     plt.xlabel("Epoch")
     plt.ylabel("F1")
     plt.legend()
-    plt.savefig("cnn_binary_f1_graph.png")
+    plt.savefig("cnn_f1_graph.png")
 
     early_stopping.load_best_model(model)
     test_loss, test_acc, f1_score, precision, recall = TestModel(opt, model, loss_fn, test_dataloader)

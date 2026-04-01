@@ -250,7 +250,6 @@ class ViGBlock(nn.Module):
         x = self.ffn(x)
         return x
 
-
 class Downsample(nn.Module):
     def __init__(self, in_dim, out_dim):
         super().__init__()
@@ -307,7 +306,6 @@ class GNNClassifier(nn.Module):
 
         return x
 
-
 class CNNGNNModel(nn.Module):
     def __init__(self, opt, cnn_blocks, extraction_layer, gnn_channels, num_classes, k, drop_path):
         super(CNNGNNModel, self).__init__()
@@ -351,10 +349,9 @@ class EarlyStopping:
             self.counter = 0
 
     def load_best_model(self, model):
-        os.makedirs("weights/multilabel", exist_ok=True)
-        torch.save(self.best_model_state, "weights/multilabel/cnn-gnn.pth")
+        os.makedirs("../../weights/multilabel", exist_ok=True)
+        torch.save(self.best_model_state, "../../weights/multilabel/cnn-gnn.pth")
         model.load_state_dict(self.best_model_state)
-
 
 def PrepData(opt, dataset_train, dataset_val, dataset_test):
     label_cols = [col for col in dataset_train.df.columns if col not in ["ID"]]
@@ -369,7 +366,6 @@ def PrepData(opt, dataset_train, dataset_val, dataset_test):
     test_dataloader = DataLoader(dataset_test, batch_size=opt.batch_size, shuffle=False, num_workers=8, pin_memory=True)
 
     return train_dataloader, val_dataloader, test_dataloader, pos_weights
-
 
 def train_one_epoch(opt, dataloader, model, loss_fn, optimiser):
     loss_list = []
@@ -398,7 +394,6 @@ def train_one_epoch(opt, dataloader, model, loss_fn, optimiser):
     avg_accuracy = correct / total
     f1 = f1.compute().item()
     return avg_loss, avg_accuracy, f1
-
 
 def TestModel(opt, model, loss_fn, dataloader):
     model.eval()
@@ -437,7 +432,6 @@ def TestModel(opt, model, loss_fn, dataloader):
     print(classification_report(val_targets_np, val_preds_np, target_names=LABEL_NAMES, zero_division=0))
 
     return avg_loss, accuracy, f1_score, precision, recall
-
 
 def UseModel(opt, model, dataset_train, dataset_val, dataset_test, gnn_channels):
     if opt.weight_decay != -1:
@@ -508,7 +502,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test, gnn_channels)
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.legend()
-    plt.savefig("cnn_gnn_multilabel_loss_graph.png")
+    plt.savefig("cnn_gnn_loss_graph.png")
 
     plt.figure(figsize=(10, 5))
     plt.plot(train_accs, label="Train Accuracy")
@@ -517,7 +511,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test, gnn_channels)
     plt.xlabel("Epoch")
     plt.ylabel("Accuracy")
     plt.legend()
-    plt.savefig("cnn_gnn_multilabel_accuracy_graph.png")
+    plt.savefig("cnn_gnn_accuracy_graph.png")
 
     plt.figure(figsize=(10, 5))
     plt.plot(train_f1s, label="Train F1")
@@ -526,7 +520,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test, gnn_channels)
     plt.xlabel("Epoch")
     plt.ylabel("F1")
     plt.legend()
-    plt.savefig("cnn_gnn_multilabel_f1_graph.png")
+    plt.savefig("cnn_gnn_f1_graph.png")
 
     early_stopping.load_best_model(model)
     test_loss, test_acc, f1_score, precision, recall = TestModel(opt, model, loss_fn, test_dataloader)
@@ -534,7 +528,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test, gnn_channels)
     print(f"test acc = {test_acc:.4f}")
     print(f"test f1 score = {f1_score:.4f}")
 
-    summary_path = "cnn-gnn-multilabel.txt"
+    summary_path = "cnn-gnn.txt"
     header = ("date;time;learning_rate;classes;k-neighbours;gnn_channels;graph_layer_type;stochastic_path;cnn_extraction_layer;cnn_res_blocks;weight_decay;weight_parameter;threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n")
 
     now = datetime.now()

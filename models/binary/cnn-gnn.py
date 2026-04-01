@@ -1,10 +1,10 @@
 import os
+import opts
 import pandas as pd
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import torch_geometric
-import opts
 from torch_geometric import nn as tg_nn
 from torch import nn
 from PIL import Image
@@ -341,8 +341,8 @@ class EarlyStopping:
             self.counter = 0
 
     def load_best_model(self, model):
-        os.makedirs("weights/binary", exist_ok=True)
-        torch.save(self.best_model_state, "weights/binary/cnn-gnn.pth")
+        os.makedirs("../../weights/binary", exist_ok=True)
+        torch.save(self.best_model_state, "../../weights/binary/cnn-gnn.pth")
         model.load_state_dict(self.best_model_state)
 
 def PrepData(opt, dataset_train, dataset_val, dataset_test):
