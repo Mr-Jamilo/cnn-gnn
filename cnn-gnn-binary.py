@@ -49,27 +49,16 @@ class CustomImageDataset(Dataset):
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
         super(ResidualBlock, self).__init__()
-        self.conv1 = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=3,
-            stride=stride,
-            padding=1,
-            bias=False,
-        )
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(out_channels)
         self.relu = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv2d(
-            out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False
-        )
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(out_channels)
 
         self.shortcut = nn.Sequential()
         if stride != 1 or in_channels != out_channels:
             self.shortcut = nn.Sequential(
-                nn.Conv2d(
-                    in_channels, out_channels, kernel_size=1, stride=stride, bias=False
-                ),
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
                 nn.BatchNorm2d(out_channels),
             )
 
@@ -162,7 +151,7 @@ class DyGraphGIN2d(nn.Module):
             nn.Linear(in_channels, out_channels),
             nn.BatchNorm1d(out_channels),
             nn.GELU(),
-            nn.Linear(out_channels, out_channels),
+            nn.Linear(out_channels, out_channels)
         )
         self.gin = tg_nn.GINConv(mlp, eps=eps, train_eps=train_eps)
 
@@ -175,37 +164,36 @@ class DyGraphGIN2d(nn.Module):
         out = out.reshape(B, N, -1).transpose(1, 2).unsqueeze(-1)
         return out
 
-
 class GrapherModule(nn.Module):
     def __init__(self, opt, in_channels, hidden_channels, k, dilation, drop_path=0.0):
         super(GrapherModule, self).__init__()
         self.graph_type = opt.graph_layer_type
         self.fc1 = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, 1, stride=1, padding=0),
-            nn.BatchNorm2d(in_channels),
+            nn.BatchNorm2d(in_channels)
         )
 
         self.graph_conv = nn.Sequential(
             DyGraphConv2d(in_channels, hidden_channels, k, dilation, act="None"),
             nn.BatchNorm2d(hidden_channels),
-            nn.GELU(),
+            nn.GELU()
         )
 
         self.graph_att = nn.Sequential(
             DyGraphAtt2d(in_channels, hidden_channels, k=k, heads=4),
             nn.BatchNorm2d(hidden_channels),
-            nn.GELU(),
+            nn.GELU()
         )
 
         self.graph_iso = nn.Sequential(
             DyGraphGIN2d(in_channels, hidden_channels, k=k),
             nn.BatchNorm2d(hidden_channels),
-            nn.GELU(),
+            nn.GELU()
         )
 
         self.fc2 = nn.Sequential(
             nn.Conv2d(hidden_channels, in_channels, 1, 1, 0),
-            nn.BatchNorm2d(in_channels),
+            nn.BatchNorm2d(in_channels)
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
@@ -233,11 +221,11 @@ class FFNModule(nn.Module):
         self.fc1 = nn.Sequential(
             nn.Conv2d(in_channels, hidden_channels, 1, 1, 0),
             nn.BatchNorm2d(hidden_channels),
-            nn.GELU(),
+            nn.GELU()
         )
         self.fc2 = nn.Sequential(
             nn.Conv2d(hidden_channels, in_channels, 1, 1, 0),
-            nn.BatchNorm2d(in_channels),
+            nn.BatchNorm2d(in_channels)
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
@@ -248,13 +236,10 @@ class FFNModule(nn.Module):
         x = self.drop_path(x) + shortcut
         return x
 
-
 class ViGBlock(nn.Module):
     def __init__(self, opt, channels, k, dilation, drop_path=0.0):
         super(ViGBlock, self).__init__()
-        self.grapher = GrapherModule(
-            opt, channels, channels * 2, k, dilation, drop_path
-        )
+        self.grapher = GrapherModule(opt, channels, channels * 2, k, dilation, drop_path)
         self.ffn = FFNModule(channels, channels * 4, drop_path)
 
     def forward(self, x):
@@ -267,7 +252,7 @@ class Downsample(nn.Module):
         super().__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(in_dim, out_dim, 3, stride=2, padding=1),
-            nn.BatchNorm2d(out_dim),
+            nn.BatchNorm2d(out_dim)
         )
 
     def forward(self, x):
@@ -283,7 +268,7 @@ class GNNClassifier(nn.Module):
         self.projection = nn.Sequential(
             nn.Conv2d(in_channels, channels[0], kernel_size=1, stride=1, padding=0),
             nn.BatchNorm2d(channels[0]),
-            nn.GELU(),
+            nn.GELU()
         )
 
         self.stages = nn.ModuleList()
@@ -396,10 +381,7 @@ def train_one_epoch(opt, dataloader, model, loss_fn, optimiser):
         correct += (outputs == targets.bool()).sum().item()
         total += targets.numel()
 
-        print(
-            f"  Batch {batch + 1}/{len(dataloader)} - Loss: {loss.item():.4f} - Acc: {(correct / total):.4f}",
-            end="\r",
-        )
+        print(f"  Batch {batch + 1}/{len(dataloader)} - Loss: {loss.item():.4f} - Acc: {(correct / total):.4f}", end="\r")
 
     avg_loss = np.mean(loss_list)
     avg_accuracy = correct / total

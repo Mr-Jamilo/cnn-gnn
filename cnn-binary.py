@@ -54,7 +54,7 @@ class ResidualBlock(nn.Module):
         if stride != 1 or in_channels != out_channels:
             self.shortcut = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(out_channels),
+                nn.BatchNorm2d(out_channels)
             )
 
     def forward(self, x):
@@ -385,16 +385,6 @@ if __name__ == "__main__":
     dataset_test = CustomImageDataset(df=TEST_LABELS, img_dir=TEST_DATA, transform=TEST_TRANSFORMS)
 
     model = ResNet(ResidualBlock, opt.cnn_res_blocks_list).to(DEVICE)
-
-    print(f"\nCNN Binary Model Configuration:")
-    print(f"  ResNet blocks: {opt.cnn_res_blocks_list}")
-    print(f"  Learning rate: {opt.learning_rate}")
-    print(f"  Weight decay: {opt.weight_decay}")
-    print(f"  Threshold: {opt.threshold}")
-    print(f"  Batch size: {opt.batch_size}")
-    print(f"  Epochs: {opt.epochs}")
-    print()
-
     print(summary(model, input_size=(opt.batch_size, 3, 224, 224)))
 
     UseModel(opt, model, dataset_train, dataset_val, dataset_test)
