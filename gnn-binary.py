@@ -258,7 +258,7 @@ class EarlyStopping:
         model.load_state_dict(self.best_model_state)
 
 def PrepData(opt, dataset_train, dataset_val, dataset_test):
-    label_cols = [col for col in data if col not in ["ID"]]
+    label_cols = [col for col in dataset_train.df.columns if col not in ["ID"]]
     positives = dataset_train.df[label_cols].sum(axis=0).astype(float)
     total = len(dataset_train.df)
     negatives = total - positives
@@ -482,6 +482,7 @@ def predict_image(model, image):
     img = Image.open(image).convert('RGB')
     img_tensor = TEST_TRANSFORMS(img).unsqueeze(0).to(DEVICE)
     with torch.no_grad():
+        output = model(img_tensor)
         probability = torch.sigmoid(output).item()
         prediction = 1 if probability > 0.5 else 0
 

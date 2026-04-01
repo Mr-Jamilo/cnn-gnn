@@ -1,5 +1,3 @@
-#TODO look into using bash scripts (https://github.com/Delphboy/SuperCap/tree/main)
-
 import os
 import pandas as pd
 import torch
@@ -9,32 +7,33 @@ from torch import nn
 from PIL import Image
 from torchvision.transforms import v2
 from torch.utils.data import Dataset, DataLoader
-from torchmetrics.classification import BinaryF1Score, BinaryPrecision, BinaryRecall
+from torchmetrics.classification import MultilabelF1Score, MultilabelPrecision, MultilabelRecall
 from sklearn.metrics import classification_report
 from datetime import datetime
 from torchinfo import summary
 
 TRAIN_DIR = 'dataset/Training_Set/Training_Set'
 TRAIN_LABELS = pd.read_csv(f'{TRAIN_DIR}/RFMiD_Training_Labels.csv')
-TRAIN_LABELS = TRAIN_LABELS[['ID', 'Disease_Risk']]
+TRAIN_LABELS = TRAIN_LABELS[['ID', 'DR', 'MH', 'TSLN', 'ODC']]
 TRAIN_DATA = f'{TRAIN_DIR}/Training'
 
 VAL_DIR = 'dataset/Evaluation_Set/Evaluation_Set'
 VAL_LABELS = pd.read_csv(f'{VAL_DIR}/RFMiD_Validation_Labels.csv')
-VAL_LABELS = VAL_LABELS[['ID', 'Disease_Risk']]
+VAL_LABELS = VAL_LABELS[['ID', 'DR', 'MH', 'TSLN', 'ODC']]
 VAL_DATA = f'{VAL_DIR}/Validation'
 
 TEST_DIR = 'dataset/Test_Set/Test_Set'
 TEST_LABELS = pd.read_csv(f'{TEST_DIR}/RFMiD_Testing_Labels.csv')
-TEST_LABELS = TEST_LABELS[['ID', 'Disease_Risk']]
+TEST_LABELS = TEST_LABELS[['ID', 'DR', 'MH', 'TSLN', 'ODC']]
 TEST_DATA = f'{TEST_DIR}/Test'
 
-RES_BLOCKS = [3, 4, 6, 3]
+RES_BLOCKS = [2, 2, 2, 2]
+NUM_CLASSES = 4
 LEARNING_RATE = 1e-4
 USE_WEIGHT_BIAS = True
-WEIGHT_DECAY = 1e-3
+WEIGHT_DECAY = 1e-2
 EPOCHS = 150
-THRESHOLD = 0.6
+THRESHOLD = 0.8
 TRAINING_BATCH_SIZE = 32
 TEST_BATCH_SIZE = 32
 train_transform_list = [v2.ToImage(),v2.Resize((224, 224)), v2.RandomHorizontalFlip(0.5), v2.RandomRotation(degrees=15), v2.ConvertImageDtype(torch.float), v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),]
@@ -60,7 +59,8 @@ class CustomImageDataset(Dataset):
         img_name = str(row['ID']) + ".png"
         img_path = os.path.join(self.img_dir, img_name)
         img = Image.open(img_path).convert('RGB')
-        labels = torch.tensor(row['Disease_Risk'])
+
+        labels = torch.tensor(row.drop('ID').values, dtype=torch.float32)
         if self.transform:
             img = self.transform(img)
         if self.target_transform:
@@ -105,7 +105,7 @@ class ResNet(nn.Module):
         self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
         self.dropout = nn.Dropout(0.5)
         self.flatten = nn.Flatten()
-        self.linear = nn.Linear(512, 1)
+        self.linear = nn.Linear(512, NUM_CLASSES)
 
     def _make_layer(self, block, out_channels, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)
@@ -161,7 +161,8 @@ def PrepData(dataset_train, dataset_val, dataset_test):
     negatives = total - positives
     pos_weight_vals = (negatives / positives).values
     pos_weights = torch.tensor(pos_weight_vals, dtype=torch.float32)
-    # pos_weights = torch.clamp(pos_weights, max=10.0)
+    print("Pos weights:", pos_weights)
+    # pos_weights = torch.clamp(pos_weights, max=200.0)
 
     # print(dataset.__getitem__(3))
     # print(dataset.__len__())
@@ -174,15 +175,17 @@ def PrepData(dataset_train, dataset_val, dataset_test):
 
     return train_dataloader, val_dataloader, test_dataloader, pos_weights
 
+
 def train_one_epoch(dataloader, model, loss_fn, optimiser):
     loss_list = []
+    correct_list = []
     correct = 0
     total = 0
-    f1 = BinaryF1Score().to(DEVICE)
+    f1 = MultilabelF1Score(num_labels=NUM_CLASSES).to(DEVICE)
 
     for batch, data in enumerate(dataloader):
         inputs, targets = data
-        inputs, targets = inputs.to(DEVICE), targets.to(DEVICE).float().unsqueeze(1)
+        inputs, targets = inputs.to(DEVICE), targets.to(DEVICE).float()
         optimiser.zero_grad()
         outputs = model(inputs)
         loss = loss_fn(outputs, targets)
@@ -207,16 +210,16 @@ def TestModel(model, loss_fn, dataloader):
     test_loss = 0
     correct = 0
     total = 0
-    metric = BinaryF1Score().to(DEVICE)
-    precision_metric = BinaryPrecision().to(DEVICE)
-    recall_metric = BinaryRecall().to(DEVICE)
+    metric = MultilabelF1Score(num_labels=NUM_CLASSES).to(DEVICE)
+    precision_metric = MultilabelPrecision(num_labels=NUM_CLASSES).to(DEVICE)
+    recall_metric = MultilabelRecall(num_labels=NUM_CLASSES).to(DEVICE)
 
     all_preds = []
     all_targets = []
 
     with torch.no_grad():
         for inputs, labels in dataloader:
-            inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)
+            inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float()
             outputs = model(inputs)
             test_loss += loss_fn(outputs, labels).item()
             outputs = torch.sigmoid(outputs) > THRESHOLD
@@ -239,16 +242,17 @@ def TestModel(model, loss_fn, dataloader):
 
     return avg_loss, accuracy, f1_score, precision, recall
 
+
 def UseModel(model, dataset_train, dataset_val, dataset_test):
     optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode='min', factor=0.7, patience=10)
-    early_stopping = EarlyStopping(patience=20, delta=0.00001)
+    early_stopping = EarlyStopping(patience=25, delta=0.0001)
 
     train_dataloader, val_dataloader, test_dataloader, pos_weights = PrepData(dataset_train, dataset_val, dataset_test)
-    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE))
-    # loss_fn = nn.CrossEntropyLoss()
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(DEVICE)) if USE_WEIGHT_BIAS else nn.BCEWithLogitsLoss()
 
     actual_epochs = 0
+
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
     train_f1s, val_f1s = [], []
@@ -262,16 +266,16 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
         running_val_loss = 0.0
         correct = 0
         total = 0
-        val_f1 = BinaryF1Score().to(DEVICE)
+        val_f1 = MultilabelF1Score(num_labels=NUM_CLASSES).to(DEVICE)
         with torch.no_grad():
             for inputs, labels in val_dataloader:
-                inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)
+                inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float()
                 outputs = model(inputs)
                 running_val_loss += loss_fn(outputs, labels).item()
 
-                outputs = torch.sigmoid(outputs) > THRESHOLD
-                val_f1.update(outputs, labels)
-                correct += (outputs == labels.bool()).sum().item()
+                preds = torch.sigmoid(outputs) > THRESHOLD
+                val_f1.update(preds, labels)
+                correct += (preds == labels.bool()).sum().item()
                 total += labels.numel()
 
         val_loss = running_val_loss / len(val_dataloader) if len(val_dataloader) > 0 else 0.0
@@ -334,9 +338,9 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
     print(f'test acc = {test_acc:.4f}')
     print(f'test f1 score = {f1_score:.4f}')
 
-    # Logging
-    summary_path = 'binary.txt'
-    header = "date;time;res_blocks;learning_rate;weight_decay;weight_parameter;Threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n"
+    #Logging
+    summary_path = 'main.txt'
+    header = "date;time;res_blocks;classes;learning_rate;weight_decay;weight_parameter;Threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n"
 
     now = datetime.now()
     date_str = now.strftime("%d-%m-%Y")
@@ -352,6 +356,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
         f"{date_str};"
         f"{time_str};"
         f"{RES_BLOCKS};"
+        f"{len(label_cols)}({classes_str});"
         f"{LEARNING_RATE};"
         f"{WEIGHT_DECAY};"
         f"{str(weight_param_used)};"
@@ -373,6 +378,7 @@ def UseModel(model, dataset_train, dataset_val, dataset_test):
 
 if __name__ == '__main__':
     assert torch.cuda.is_available(), "CUDA is not available. Please run on a machine with a GPU."
+
     dataset_train = CustomImageDataset(df=TRAIN_LABELS, img_dir=TRAIN_DATA, transform=TRAIN_TRANSFORMS)
     dataset_val = CustomImageDataset(df=VAL_LABELS, img_dir=VAL_DATA, transform=TEST_TRANSFORMS)
     dataset_test = CustomImageDataset(df=TEST_LABELS, img_dir=TEST_DATA, transform=TEST_TRANSFORMS)

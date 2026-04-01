@@ -86,7 +86,7 @@ class DyGraphAtt2d(nn.Module):
 
     def forward(self, x):
         B, C, N, _ = x.shape
-        x_flat = x.squeeze(-1).transpose(1, 2).reshape(B * N, C)
+        x_flat = x.squeeze(-1).transpose(1, 2).contiguous.view(B * N, C)
         batch_idx = torch.arange(B, device=x.device).repeat_interleave(N)
         edge_index = knn_graph(x_flat, self.k, batch_idx, loop=True)
         out = self.gat(x_flat, edge_index)
@@ -263,6 +263,7 @@ def PrepData(opt, dataset_train, dataset_val, dataset_test):
     total = len(dataset_train.df)
     negatives = total - positives
     pos_weight_vals = (negatives / positives).values
+    dampened_weights = np.sqrt(pos_weight_vals)
     pos_weights = torch.tensor(pos_weight_vals, dtype=torch.float32)
 
     # print(dataset.__getitem__(3))
