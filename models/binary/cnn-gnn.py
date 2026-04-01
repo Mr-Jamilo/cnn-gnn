@@ -1,10 +1,10 @@
 import os
-import opts
 import pandas as pd
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import torch_geometric
+import opts
 from torch_geometric import nn as tg_nn
 from torch import nn
 from PIL import Image
@@ -259,7 +259,7 @@ class Downsample(nn.Module):
         return self.conv(x)
 
 class GNNClassifier(nn.Module):
-       def __init__(self, opt, in_channels, in_spatial, num_classes, channels, k, drop_path):
+    def __init__(self, opt, in_channels, in_spatial, num_classes, channels, k, drop_path):
         super(GNNClassifier, self).__init__()
 
         self.num_classes = num_classes
@@ -286,7 +286,7 @@ class GNNClassifier(nn.Module):
 
         self.norm = nn.BatchNorm1d(channels[-1])
         self.head = nn.Linear(channels[-1], num_classes)
-
+    
     def forward(self, x):
         B, C, H, W = x.shape
         x = self.projection(x)

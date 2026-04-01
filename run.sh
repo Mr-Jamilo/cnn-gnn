@@ -5,7 +5,7 @@ source .venv/bin/activate
 run_cnn_binary() {
     local m_res_blocks=$1
 
-    python3 cnn-binary.py \
+    python3 -m models.binary.cnn \
         --dataset_directory "./dataset" \
         --learning_rate 1e-4 \
         --weight_decay 1e-3 \
@@ -22,7 +22,7 @@ run_gnn() {
     local m_knn=$3
     local m_sto=$4
 
-    python3 gnn-multilabel.py --size "$m_size" \
+    python3 -m models.multilabel.gnn --size "$m_size" \
         --dataset_directory "./dataset" \
         --learning_rate 1e-5 \
         --weight_decay 1e-3 \
@@ -43,7 +43,7 @@ run_cnn_gnn() {
     local m_extract=$5
     local m_res_blocks=$6
 
-    python3 cnn-gnn-binary.py --size "$m_size" \
+    python3 -m models.binary.cnn-gnn --size "$m_size" \
         --dataset_directory "./dataset" \
         --learning_rate 4e-4 \
         --weight_decay 1e-3 \
@@ -66,7 +66,7 @@ run_cnn_gnn_multilabel() {
     local m_extract=$5
     local m_res_blocks=$6
 
-    python3 cnn-gnn-multilabel.py --size "$m_size" \
+    python3 -m models.multilabel.cnn-gnn --size "$m_size" \
         --dataset_directory "./dataset" \
         --learning_rate 1e-5 \
         --weight_decay 1e-3 \
