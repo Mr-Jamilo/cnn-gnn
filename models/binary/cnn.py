@@ -8,7 +8,7 @@ from torch import nn
 from PIL import Image
 from torchvision.transforms import v2
 from torch.utils.data import Dataset, DataLoader
-from torchmetrics.classification import BinaryF1Score, BinaryPrecision, BinaryRecall
+from torchmetrics.classification import F1Score, Precision, Recall
 from sklearn.metrics import classification_report
 from datetime import datetime
 from torchinfo import summary
@@ -155,7 +155,7 @@ def train_one_epoch(opt, dataloader, model, loss_fn, optimiser):
     loss_list = []
     correct = 0
     total = 0
-    f1 = BinaryF1Score().to(DEVICE)
+    f1 = F1Score(task="multiclass", num_classes=2, average="macro").to(DEVICE)
 
     for batch, data in enumerate(dataloader):
         inputs, targets = data
@@ -184,10 +184,10 @@ def TestModel(opt, model, loss_fn, dataloader):
     test_loss = 0
     correct = 0
     total = 0
-    metric = BinaryF1Score().to(DEVICE)
-    precision_metric = BinaryPrecision().to(DEVICE)
-    recall_metric = BinaryRecall().to(DEVICE)
-
+    metric = F1Score(task="multiclass", num_classes=2, average="macro").to(device)
+    precision_metric = Precision(task="multiclass", num_classes=2, average="macro").to(device)
+    recall_metric = Recall(task="multiclass", num_classes=2, average="macro").to(device)
+    
     all_preds = []
     all_targets = []
 
@@ -243,7 +243,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
         running_val_loss = 0.0
         correct = 0
         total = 0
-        val_f1 = BinaryF1Score().to(DEVICE)
+        val_f1 = F1Score(task="multiclass", num_classes=2, average="macro").to(DEVICE)
 
         with torch.no_grad():
             for inputs, labels in val_dataloader:
@@ -313,7 +313,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     print(f"test acc = {test_acc:.4f}")
     print(f"test f1 score = {f1_score:.4f}")
 
-    summary_path = "cnn-binary.txt"
+    summary_path = "models/binary/cnn.txt"
     header = ("date;time;res_blocks;learning_rate;weight_decay;weight_parameter;threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n")
 
     now = datetime.now()

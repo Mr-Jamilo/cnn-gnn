@@ -413,7 +413,6 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     plt.savefig("gnn_loss_graph.png")
     # plt.show()
 
-    # --- Plot Accuracy ---
     plt.figure(figsize=(10, 5))
     plt.plot(train_accs, label="Train Accuracy")
     plt.plot(val_accs, label="Val Accuracy")
@@ -440,8 +439,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     print(f"test acc = {test_acc:.4f}")
     print(f"test f1 score = {f1_score:.4f}")
 
-    # Logging
-    summary_path = "gnn.txt"
+    summary_path = "models/multilabel/gnn.txt"
     header = "date;time;learning_rate;classes;k-neighbours;channels;depth;graph_layer_type;stochastic_path;weight_decay;weight_parameter;Threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n"
 
     now = datetime.now()
