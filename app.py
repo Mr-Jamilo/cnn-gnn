@@ -2,9 +2,9 @@ import streamlit as st
 import pandas as pd
 import torch
 import argparse
-import gnn
+import models.binary.gnn as gnn
 from PIL import Image
-from gnn import ViGNN, DEVICE
+from models.binary.gnn import ViGNN, DEVICE
 from streamlit_image_select import image_select
 
 st.write("#### 👈 Change classification type from the dropdown on the left.")
@@ -17,9 +17,9 @@ uploaded_file = st.file_uploader("Upload A Retinal Fundus Image", type=["jpg", "
 
 opt = argparse.Namespace(graph_layer_type='GCN', k_neighbours=5, stochastic_path=0.1)
 vignn_binary = ViGNN(opt, in_channels=3, num_classes=1, k=opt.k_neighbours, depths=[2, 2, 6, 2], channels=[80, 160, 400, 640], drop_path=opt.stochastic_path).to(DEVICE)
-vignn_binary.load_state_dict(torch.load("weights/binary/vignn.pth"))
+#vignn_binary.load_state_dict(torch.load("weights/binary/vignn.pth"))
 
-def run_model(image):
+el(image):
     st.write(gnn.predict_image(vignn_binary, image))
 
 if uploaded_file is not None:

@@ -439,7 +439,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     print(f"test acc = {test_acc:.4f}")
     print(f"test f1 score = {f1_score:.4f}")
 
-    summary_path = "models/multilabel/gnn.txt"
+    summary_path = "gnn-multilabel.txt"
     header = "date;time;learning_rate;classes;k-neighbours;channels;depth;graph_layer_type;stochastic_path;weight_decay;weight_parameter;Threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n"
 
     now = datetime.now()

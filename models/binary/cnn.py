@@ -184,9 +184,9 @@ def TestModel(opt, model, loss_fn, dataloader):
     test_loss = 0
     correct = 0
     total = 0
-    metric = F1Score(task="multiclass", num_classes=2, average="macro").to(device)
-    precision_metric = Precision(task="multiclass", num_classes=2, average="macro").to(device)
-    recall_metric = Recall(task="multiclass", num_classes=2, average="macro").to(device)
+    metric = F1Score(task="multiclass", num_classes=2, average="macro").to(DEVICE)
+    precision_metric = Precision(task="multiclass", num_classes=2, average="macro").to(DEVICE)
+    recall_metric = Recall(task="multiclass", num_classes=2, average="macro").to(DEVICE)
     
     all_preds = []
     all_targets = []
@@ -313,7 +313,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     print(f"test acc = {test_acc:.4f}")
     print(f"test f1 score = {f1_score:.4f}")
 
-    summary_path = "models/binary/cnn.txt"
+    summary_path = "cnn-binary.txt"
     header = ("date;time;res_blocks;learning_rate;weight_decay;weight_parameter;threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n")
 
     now = datetime.now()
