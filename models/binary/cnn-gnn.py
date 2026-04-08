@@ -395,16 +395,16 @@ def TestModel(opt, model, loss_fn, dataloader):
     test_loss = 0
     correct = 0
     total = 0
-    metric = F1Score(task="multiclass", num_classes=2, average="macro").to(device)
-    precision_metric = Precision(task="multiclass", num_classes=2, average="macro").to(device)
-    recall_metric = Recall(task="multiclass", num_classes=2, average="macro").to(device)
+    metric = F1Score(task="multiclass", num_classes=2, average="macro").to(DEVICE)
+    precision_metric = Precision(task="multiclass", num_classes=2, average="macro").to(DEVICE)
+    recall_metric = Recall(task="multiclass", num_classes=2, average="macro").to(DEVICE)
 
     all_preds = []
     all_targets = []
 
     with torch.no_grad():
         for inputs, labels in dataloader:
-            inputs, labels = inputs.to(device), labels.to(device).float().unsqueeze(1)
+            inputs, labels = inputs.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)
             outputs = model(inputs)
             test_loss += loss_fn(outputs, labels).item()
             outputs = torch.sigmoid(outputs) > opt.threshold
@@ -524,7 +524,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test, gnn_channels)
     print(f"test acc = {test_acc:.4f}")
     print(f"test f1 score = {f1_score:.4f}")
 
-    summary_path = "models/binary/cnn-gnn.txt"
+    summary_path = ("cnn-gnn-binary.txt")
     header = ("date;time;learning_rate;k-neighbours;gnn_channels;graph_layer_type;stochastic_path;""cnn_extraction_layer;cnn_res_blocks;weight_decay;weight_parameter;threshold;epochs;""early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n")
 
     now = datetime.now()

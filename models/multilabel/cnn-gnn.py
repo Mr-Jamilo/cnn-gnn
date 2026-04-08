@@ -530,7 +530,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test, gnn_channels)
     print(f"test acc = {test_acc:.4f}")
     print(f"test f1 score = {f1_score:.4f}")
 
-    summary_path = "models/multilabel/cnn-gnn.txt"
+    summary_path = ("cnn-gnn-multilabel.txt")
     header = ("date;time;learning_rate;classes;k-neighbours;gnn_channels;graph_layer_type;stochastic_path;cnn_extraction_layer;cnn_res_blocks;weight_decay;weight_parameter;threshold;epochs;early_stopping;train_transforms;test_transforms;precision;recall;f1_score\n")
 
     now = datetime.now()
