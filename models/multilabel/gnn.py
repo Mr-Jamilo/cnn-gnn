@@ -360,10 +360,7 @@ def UseModel(opt, model, dataset_train, dataset_val, dataset_test):
     for epoch in range(opt.epochs):
         print(f"Epoch {epoch + 1}/{opt.epochs}")
         model.train(True)
-        train_loss, train_acc, train_f1 = train_one_epoch(
-            opt, train_dataloader, model, loss_fn, optimiser
-        )
-        # train_loss = train_one_epoch(train_dataloader, model, loss_fn, optimiser)
+        train_loss, train_acc, train_f1 = train_one_epoch(opt, train_dataloader, model, loss_fn, optimiser)
         model.eval()
         running_val_loss = 0.0
         correct = 0
