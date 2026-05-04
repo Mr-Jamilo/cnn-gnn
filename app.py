@@ -22,6 +22,7 @@ from utils import (
     extract_image_id,
     prepare_image_for_model,
     DISEASE_NAMES,
+    MULTILABEL_DISEASE_NAMES,
     TEST_IMAGES_DIR,
 )
 
@@ -59,7 +60,7 @@ if "inference_result" not in st.session_state:
 if "image_id" not in st.session_state:
     st.session_state.image_id = None
 
-if "is_test_image" not in st.session_state:
+if "is_test_image_flag" not in st.session_state:
     st.session_state.is_test_image_flag = False
 
 # ==================== Sidebar Configuration ====================
@@ -71,6 +72,13 @@ classification_type = st.sidebar.radio(
     ["Binary Classification", "Multilabel Classification"],
     horizontal=False,
 )
+
+# Clear inference result when switching classification type
+if "prev_classification_type" not in st.session_state:
+    st.session_state.prev_classification_type = classification_type
+if st.session_state.prev_classification_type != classification_type:
+    st.session_state.inference_result = None
+    st.session_state.prev_classification_type = classification_type
 
 model_type = st.sidebar.radio(
     "Choose model:", ["GNN", "CNN", "CNN-GNN"], horizontal=True
@@ -88,13 +96,13 @@ with st.sidebar.expander("ℹ️ About", expanded=False):
     - Confidence score provided
     
     **Multilabel Classification**
-    - Detects specific retinal diseases
+    - Detects specific retinal diseases (DR, MH, TSLN, ODC)
     - Adjustable detection threshold
-    - Shows up to 45 different conditions
-    
+
     **Models**
     - **GNN**: Graph Neural Network approach
     - **CNN**: Convolutional Neural Network approach
+    - **CNN-GNN**: Hybrid CNN + GNN approach
     
     **Image Sources**
     - Test Set: Pre-loaded images with known labels
@@ -110,7 +118,7 @@ with st.sidebar.expander("📊 Dataset Info", expanded=False):
         st.markdown(f"""
         **Test Set Statistics**
         - Total images: {len(test_labels)}
-        - Available diseases: {len(utils.DISEASE_NAMES)}
+        - Multilabel diseases: {len(utils.MULTILABEL_DISEASE_NAMES)} ({', '.join(utils.MULTILABEL_DISEASE_NAMES)})
         - Image size: 224×224
         """)
     else:
@@ -444,17 +452,17 @@ def multilabel_classification():
             with col3:
                 st.metric("Inference Time", f"{result['inference_time']:.3f}s")
 
+            # Get ground truth if available
+            ground_truth = None
+            if st.session_state.is_test_image_flag:
+                ground_truth = get_ground_truth(
+                    st.session_state.image_id, test_labels
+                )
+
             # Detected diseases table
             if result["detected"]:
                 st.markdown("---")
                 st.subheader("🔴 Detected Diseases")
-
-                # Get ground truth if available
-                ground_truth = None
-                if st.session_state.is_test_image_flag:
-                    ground_truth = get_ground_truth(
-                        st.session_state.image_id, test_labels
-                    )
 
                 # Build table data
                 table_data = []
@@ -463,19 +471,9 @@ def multilabel_classification():
                     prob = detection["probability"]
 
                     if ground_truth:
-                        actual = (
-                            "YES"
-                            if ground_truth["diseases"].get(disease, 0) == 1
-                            else "NO"
-                        )
-                        match = (
-                            "✓"
-                            if (
-                                prob > 0.5
-                                and ground_truth["diseases"].get(disease, 0) == 1
-                            )
-                            else "✗"
-                        )
+                        gt_label = ground_truth["diseases"].get(disease, 0)
+                        actual = "YES" if gt_label == 1 else "NO"
+                        match = "✓" if gt_label == 1 else "✗"
                         table_data.append(
                             {
                                 "Disease": disease,
@@ -504,10 +502,22 @@ def multilabel_classification():
                 st.markdown("---")
                 st.subheader("🟢 Not Detected (Below Threshold)")
 
-                undetected_text = ", ".join(result["undetected"])
-                st.markdown(
-                    f"{len(result['undetected'])} diseases below threshold:\n\n{undetected_text}"
-                )
+                if ground_truth:
+                    undetected_data = []
+                    for disease in result["undetected"]:
+                        gt_label = ground_truth["diseases"].get(disease, 0)
+                        actual = "YES" if gt_label == 1 else "NO"
+                        match = "✓" if gt_label == 0 else "✗ (missed)"
+                        undetected_data.append(
+                            {"Disease": disease, "Actual": actual, "Match": match}
+                        )
+                    df_undetected = pd.DataFrame(undetected_data)
+                    st.dataframe(df_undetected, use_container_width=True, hide_index=True)
+                else:
+                    undetected_text = ", ".join(result["undetected"])
+                    st.markdown(
+                        f"{len(result['undetected'])} diseases below threshold:\n\n{undetected_text}"
+                    )
 
 
 # ==================== Main App ====================

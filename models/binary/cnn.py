@@ -128,8 +128,7 @@ class EarlyStopping:
             self.counter = 0
 
     def load_best_model(self, model):
-        os.makedirs("../../weights/binary", exist_ok=True)
-        torch.save(self.best_model_state, "../../weights/binary/cnn.pth")
+        torch.save(self.best_model_state, "cnn-binary.pth")
         model.load_state_dict(self.best_model_state)
 
 

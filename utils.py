@@ -5,6 +5,7 @@ Handles model loading, CSV data loading, image processing, and inference.
 
 import os
 import argparse
+import importlib
 import time
 from typing import Optional, Dict, List, Tuple
 from pathlib import Path
@@ -63,6 +64,9 @@ DISEASE_NAMES = [
     "CL",
 ]
 
+# The 4 diseases the multilabel models are actually trained on
+MULTILABEL_DISEASE_NAMES = ["DR", "MH", "TSLN", "ODC"]
+
 # Paths
 WEIGHTS_DIR = Path("weights")
 DATASET_DIR = Path("dataset")
@@ -79,12 +83,12 @@ TRAIN_LABELS_PATH = TRAIN_DIR / "RFMiD_Training_Labels.csv"
 # Model weight paths
 WEIGHTS_PATHS = {
     "binary": {
-        "gnn": WEIGHTS_DIR / "binary" / "vignn.pth",
+        "gnn": WEIGHTS_DIR / "binary" / "gnn.pth",
         "cnn": WEIGHTS_DIR / "binary" / "cnn.pth",
         "cnn-gnn": WEIGHTS_DIR / "binary" / "cnn-gnn.pth",
     },
     "multilabel": {
-        "gnn": WEIGHTS_DIR / "multilabel" / "vignn.pth",
+        "gnn": WEIGHTS_DIR / "multilabel" / "gnn.pth",
         "cnn": WEIGHTS_DIR / "multilabel" / "cnn.pth",
         "cnn-gnn": WEIGHTS_DIR / "multilabel" / "cnn-gnn.pth",
     },
@@ -237,15 +241,14 @@ def load_binary_model(model_type: str = "gnn"):
             st.warning(f"Binary {model_type.upper()} weights not found: {weights_path}")
             return None
 
-        # Import here to avoid CUDA assertions during app startup
-        from models.binary.gnn import ViGNN, DEVICE
-
-        # Create model
-        opt = argparse.Namespace(
-            graph_layer_type="GCN", k_neighbours=5, stochastic_path=0.1
-        )
-
+        # Import and construct model based on type
+        # Imports are deferred to avoid CUDA assertions during app startup
         if model_type == "gnn":
+            from models.binary.gnn import ViGNN, DEVICE
+
+            opt = argparse.Namespace(
+                graph_layer_type="GCN", k_neighbours=3, stochastic_path=0.1
+            )
             model = ViGNN(
                 opt,
                 in_channels=3,
@@ -255,42 +258,30 @@ def load_binary_model(model_type: str = "gnn"):
                 channels=[80, 160, 400, 640],
                 drop_path=opt.stochastic_path,
             ).to(DEVICE)
-
-            # Load weights
-            model.load_state_dict(torch.load(weights_path, map_location=DEVICE))
-            model.eval()
-            return model
-
-        elif model_type in ["cnn", "cnn-gnn"]:
-            st.warning(f"{model_type.upper()} model loading not yet implemented")
-            return None
-
-    except Exception as e:
-        st.error(f"Error loading binary {model_type.upper()} model: {e}")
-        return None
-        opt = argparse.Namespace(
-            graph_layer_type="GCN", k_neighbours=5, stochastic_path=0.1
-        )
-
-        if model_type == "gnn":
-            model = ViGNN(
-                opt,
-                in_channels=3,
-                num_classes=1,
-                k=opt.k_neighbours,
-                depths=[2, 2, 6, 2],
-                channels=[80, 160, 400, 640],
-                drop_path=opt.stochastic_path,
-            ).to(DEVICE)
-
-            # Load weights
-            model.load_state_dict(torch.load(weights_path, map_location=DEVICE))
-            model.eval()
-            return model
 
         elif model_type == "cnn":
-            st.warning("CNN model loading not yet implemented")
-            return None
+            from models.binary.cnn import ResNet, ResidualBlock, DEVICE
+
+            model = ResNet(ResidualBlock, [2, 2, 2, 2]).to(DEVICE)
+
+        elif model_type == "cnn-gnn":
+            mod = importlib.import_module("models.binary.cnn-gnn")
+            DEVICE = mod.DEVICE
+            opt = argparse.Namespace(
+                graph_layer_type="GCN", k_neighbours=9, stochastic_path=0.1
+            )
+            model = mod.CNNGNNModel(
+                opt=opt,
+                cnn_blocks=[3, 4, 6, 3],
+                extraction_layer="layer4",
+                gnn_channels=[256, 512],
+                k=opt.k_neighbours,
+                drop_path=opt.stochastic_path,
+            ).to(DEVICE)
+
+        model.load_state_dict(torch.load(weights_path, map_location=DEVICE))
+        model.eval()
+        return model
 
     except Exception as e:
         st.error(f"Error loading binary {model_type.upper()} model: {e}")
@@ -320,36 +311,54 @@ def load_multilabel_model(model_type: str = "gnn"):
             )
             return None
 
-        # Import here to avoid CUDA assertions during app startup
-        from models.multilabel.gnn import ViGNN, DEVICE
+        num_classes = len(MULTILABEL_DISEASE_NAMES)
 
-        # Create model
-        opt = argparse.Namespace(
-            graph_layer_type="GCN", k_neighbours=5, stochastic_path=0.1
-        )
-
+        # Import and construct model based on type
+        # Imports are deferred to avoid CUDA assertions during app startup
         if model_type == "gnn":
+            from models.multilabel.gnn import ViGNN, DEVICE
+
+            opt = argparse.Namespace(
+                graph_layer_type="GCN", k_neighbours=5, stochastic_path=0.1
+            )
             model = ViGNN(
                 opt,
                 in_channels=3,
-                num_classes=len(DISEASE_NAMES),  # 45 diseases
+                num_classes=num_classes,
                 k=opt.k_neighbours,
-                depths=[2, 2, 6, 2],
-                channels=[80, 160, 400, 640],
+                depths=[2, 2, 16, 2],
+                channels=[96, 192, 384, 786],
                 drop_path=opt.stochastic_path,
             ).to(DEVICE)
 
-            # Load weights
-            model.load_state_dict(torch.load(weights_path, map_location=DEVICE))
-            model.eval()
-            return model
+        elif model_type == "cnn":
+            from models.multilabel.cnn import ResNet, ResidualBlock, DEVICE
 
-        elif model_type in ["cnn", "cnn-gnn"]:
-            st.warning(f"{model_type.upper()} model loading not yet implemented")
-            return None
+            model = ResNet(ResidualBlock, [2, 2, 2, 2], num_classes).to(DEVICE)
+
+        elif model_type == "cnn-gnn":
+            mod = importlib.import_module("models.multilabel.cnn-gnn")
+            DEVICE = mod.DEVICE
+            opt = argparse.Namespace(
+                graph_layer_type="GCN", k_neighbours=5, stochastic_path=0.1
+            )
+            model = mod.CNNGNNModel(
+                opt=opt,
+                cnn_blocks=[2, 2, 2, 2],
+                extraction_layer="layer3",
+                gnn_channels=[256, 384],
+                num_classes=num_classes,
+                k=opt.k_neighbours,
+                drop_path=opt.stochastic_path,
+            ).to(DEVICE)
+
+        model.load_state_dict(torch.load(weights_path, map_location=DEVICE))
+        model.eval()
+        return model
 
     except Exception as e:
         st.error(f"Error loading multilabel {model_type.upper()} model: {e}")
+        return None
 
 
 # ==================== Inference ====================
@@ -425,7 +434,7 @@ def run_multilabel_inference(
 
         # Create results with only detected diseases (above threshold)
         detected = []
-        for disease_name, prob in zip(DISEASE_NAMES, probabilities):
+        for disease_name, prob in zip(MULTILABEL_DISEASE_NAMES, probabilities):
             if prob >= threshold:
                 detected.append(
                     {"disease": disease_name, "probability": round(float(prob), 4)}
@@ -436,14 +445,14 @@ def run_multilabel_inference(
 
         # Get undetected diseases
         detected_names = {d["disease"] for d in detected}
-        undetected = [name for name in DISEASE_NAMES if name not in detected_names]
+        undetected = [name for name in MULTILABEL_DISEASE_NAMES if name not in detected_names]
 
         return {
             "detected": detected,
             "undetected": undetected,
             "all_probabilities": {
                 name: round(float(prob), 4)
-                for name, prob in zip(DISEASE_NAMES, probabilities)
+                for name, prob in zip(MULTILABEL_DISEASE_NAMES, probabilities)
             },
             "inference_time": inference_time,
             "threshold": threshold,
@@ -511,7 +520,7 @@ def compare_multilabel_results(
 
     detected_names = {d["disease"] for d in detected}
 
-    for disease_name in DISEASE_NAMES:
+    for disease_name in MULTILABEL_DISEASE_NAMES:
         prob = next(
             (d["probability"] for d in detected if d["disease"] == disease_name), None
         )

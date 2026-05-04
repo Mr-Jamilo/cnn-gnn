@@ -254,7 +254,7 @@ class EarlyStopping:
             self.counter = 0
 
     def load_best_model(self, model):
-        torch.save(self.best_model_state, '../../weights/multilabel/vignn.pth')
+        torch.save(self.best_model_state, 'gnn-multilabel.pth')
         model.load_state_dict(self.best_model_state)
 
 def PrepData(opt, dataset_train, dataset_val, dataset_test):
